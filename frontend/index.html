@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Labs SoW Generator - Application Validation (OCI)</title>
+  <!-- Bootstrap for styling -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Font Awesome for icons -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <!-- Prism.js for syntax highlighting -->
+  <link href="https://cdn.jsdelivr.net/npm/prismjs/themes/prism.min.css" rel="stylesheet">
+  <!-- GitHub Markdown CSS for better rendering -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css/github-markdown.css">
+  <script src="https://cdn.jsdelivr.net/npm/prismjs/prism.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs/components/prism-python.min.js"></script>
+  <!-- Marked.js for Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body {
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      min-height: 100vh;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      padding: 2rem 0;
+    }
+    .main-container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+    .card {
+      background-color: #FFFFFF;
+      border: 1px solid #E5E7EB;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      transition: all 0.3s ease;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+    }
+    .card-header {
+      background-color: #2C3E50;
+      color: #FFFFFF;
+      border: none;
+      border-radius: 8px 8px 0 0;
+      padding: 1.5rem;
+      text-align: center;
+    }
+    .card-header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    .card-body {
+      padding: 2rem;
+    }
+    .form-floating {
+      margin-bottom: 1.5rem;
+    }
+    .form-control {
+      border: 2px solid #D1D5DB;
+      border-radius: 12px;
+      padding: 0.75rem 1rem;
+      font-size: 0.95rem;
+      background-color: #F3F4F6;
+      transition: all 0.3s ease;
+    }
+    .form-control:focus {
+      border-color: #2C3E50;
+      box-shadow: 0 0 0 0.2rem rgba(30, 58, 138, 0.25);
+      transform: translateY(-1px);
+    }
+    .form-label {
+      font-weight: 500;
+      color: #374151;
+      margin-bottom: 0.5rem;
+    }
+    .file-input-container {
+      position: relative;
+      margin-bottom: 1.5rem;
+    }
+    .file-input-wrapper {
+      position: relative;
+      display: block;
+      padding: 1rem;
+      border: 2px dashed #D1D5DB;
+      border-radius: 12px;
+      text-align: center;
+      background-color: #F9FAFB;
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+    .file-input-wrapper:hover {
+      border-color: #2C3E50;
+      background-color: #E5E7EB;
+    }
+    .file-input-wrapper.has-file {
+      border-color: #10B981;
+      background-color: #D1FAE5;
+    }
+    .file-input {
+      position: absolute;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+    .file-input-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .file-input-icon {
+      font-size: 2rem;
+      color: #6B7280;
+      transition: color 0.3s ease;
+    }
+    .file-input-wrapper:hover .file-input-icon {
+      color: #2C3E50;
+    }
+    .file-input-wrapper.has-file .file-input-icon {
+      color: #10B981;
+    }
+    .file-input-text {
+      color: #6B7280;
+      font-size: 0.9rem;
+    }
+    .file-name {
+      font-weight: 500;
+      color: #374151;
+      word-break: break-all;
+    }
+    .diagram-preview {
+      margin-top: 1rem;
+      text-align: center;
+    }
+    .diagram-preview img {
+      max-width: 200px;
+      max-height: 150px;
+      border-radius: 8px;
+      border: 2px solid #E5E7EB;
+      object-fit: cover;
+    }
+    .btn-generate {
+      background-color: #2C3E50;
+      border: none;
+      border-radius: 12px;
+      padding: 0.75rem 2rem;
+      font-size: 1rem;
+      font-weight: 500;
+      color: #FFFFFF;
+      width: 100%;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .btn-generate:hover {
+      background-color: #1E40AF;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(30, 58, 138, 0.3);
+    }
+    .btn-generate:disabled {
+      background-color: #9CA3AF;
+      transform: none;
+      box-shadow: none;
+    }
+    .loading-spinner {
+      display: none;
+      margin-left: 0.5rem;
+    }
+    .results-container {
+      margin-top: 2rem;
+    }
+    .results-card {
+      background-color: #FFFFFF;
+      border: 1px solid #E5E7EB;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
+    .results-header {
+      background-color: #10B981;
+      color: #FFFFFF;
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .results-body {
+      padding: 1.5rem;
+      max-height: 600px;
+      overflow-y: auto;
+    }
+    .markdown-body {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .markdown-body pre {
+      background: #F9FAFB;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      border-left: 4px solid #2C3E50;
+      position: relative;
+    }
+    .code-block {
+      position: relative;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background-color: #2C3E50;
+      color: #FFFFFF;
+      border: none;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .copy-btn:hover {
+      background-color: #1E40AF;
+      transform: scale(1.05);
+    }
+    table {
+      margin: 1rem 0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .error-alert {
+      background-color: #FEF2F2;
+      border: 1px solid #FECACA;
+      color: #991B1B;
+      border-radius: 12px;
+      padding: 1rem;
+      margin-top: 1rem;
+    }
+    .success-alert {
+      background-color: #D1FAE5;
+      border: 1px solid #34D399;
+      color: #065F46;
+      border-radius: 12px;
+      padding: 1rem;
+      margin-top: 1rem;
+    }
+    @media (max-width: 768px) {
+      .main-container {
+        padding: 0 15px;
+      }
+      .card-body {
+        padding: 1.5rem;
+      }
+      .card-header h1 {
+        font-size: 1.2rem;
+      }
+    }
+  </style>
+  <script defer src="https://umami-jet-gamma.vercel.app/script.js" data-website-id="37cd202e-1cf1-4458-8b91-be8ad005828c"></script>
+</head>
+<body>
+  <div class="main-container">
+    <!-- Main Form Card -->
+    <div class="card">
+      <div class="card-header">
+        <h1>
+          <i class="fas fa-file-alt"></i> Labs SoW Generator - Application Validation (OCI)
+        </h1>
+      </div>
+      <div class="card-body">
+        <form id="uploadForm" enctype="multipart/form-data">
+          <!-- Customer Field -->
+          <div class="form-floating">
+            <input type="text" name="customer" class="form-control" id="customer" placeholder="Customer Name" required>
+            <label for="customer"><i class="fas fa-building me-2"></i>Customer:</label>
+          </div>
+          <!-- Project Field -->
+          <div class="form-floating">
+            <input type="text" name="application" class="form-control" id="application" placeholder="Project Name" required>
+            <label for="application"><i class="fas fa-project-diagram me-2"></i>Project:</label>
+          </div>
+          <!-- Scope Field -->
+          <div class="mb-3">
+            <label class="form-label">
+              <i class="fas fa-align-left me-2"></i>Scope:
+            </label>
+            <textarea name="scope" class="form-control" rows="4" placeholder="Objectives, scope, and success criteria of the validation" required></textarea>
+          </div>
+          <!-- Implementation Field -->
+          <div class="mb-3">
+            <label class="form-label">
+              <i class="fas fa-align-left me-2"></i>Implementation Details:
+            </label>
+            <textarea name="impdetails" class="form-control" rows="4" placeholder="Implementation details not present in the diagram" required></textarea>
+          </div>
+          <!-- Optional Diagram Upload -->
+          <div class="file-input-container">
+            <label class="form-label">
+              <i class="fas fa-image me-2"></i>Optional Diagram:
+            </label>
+            <div class="file-input-wrapper" id="diagramWrapper">
+              <input type="file" name="diagram" class="file-input" id="diagramFile" accept="image/*">
+              <div class="file-input-content" id="diagramContent">
+                <i class="fas fa-image file-input-icon"></i>
+                <div class="file-input-text">Click to select architecture diagram (optional)</div>
+              </div>
+            </div>
+            <div class="diagram-preview" id="diagramPreview" style="display: none;">
+              <img id="diagramImage" src="" alt="Diagram Preview">
+            </div>
+          </div>
+          <!-- Template File Upload -->
+           <div class="file-input-container">
+            <label class="form-label">
+              <i class="fas fa-file-word me-2"></i>Optional Template File (DOCX):
+            </label>
+            <div class="file-input-wrapper" id="templateWrapper">
+              <input type="file" name="file" class="file-input" id="templateFile" accept=".docx" >
+              <div class="file-input-content" id="templateContent">
+                <i class="fas fa-upload file-input-icon"></i>
+                <div class="file-input-text">Click to select DOCX template file</div>
+              </div>
+            </div>
+	  </div> 
+          <!-- Generate Button -->
+          <button type="submit" class="btn btn-generate" id="generateBtn">
+            <i class="fas fa-magic me-2"></i>Generate Markdown
+            <i class="fas fa-spinner fa-spin loading-spinner" id="loadingSpinner"></i>
+          </button>
+        </form>
+      </div>
+    </div>
+    <!-- Results Container -->
+    <div class="results-container" id="resultsContainer" style="display: none;">
+      <div class="results-card">
+        <div class="results-header">
+          <h3 class="mb-0">
+            <i class="fas fa-check-circle me-2"></i>Generated Content
+          </h3>
+          <button class="btn btn-sm btn-light" id="copyAllBtn">
+            <i class="fas fa-copy me-2"></i>Copy All Markdown
+          </button>
+        </div>
+        <div class="results-body" id="markdownRendered"></div>
+      </div>
+    </div>
+    <!-- Alert Container -->
+    <div id="alertContainer"></div>
+  </div>
+  <script>
+    let rawMarkdown = '';
+
+    // Copy to clipboard with fallback
+    function copyToClipboard(text, button = null) {
+      return new Promise((resolve, reject) => {
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(resolve).catch(reject);
+        } else {
+          const textArea = document.createElement('textarea');
+          textArea.value = text;
+          textArea.style.position = 'fixed';
+          textArea.style.left = '-999999px';
+          textArea.style.top = '-999999px';
+          document.body.appendChild(textArea);
+          textArea.focus();
+          textArea.select();
+          try {
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textArea);
+            if (successful) {
+              resolve();
+            } else {
+              reject(new Error('Copy failed'));
+            }
+          } catch (err) {
+            document.body.removeChild(textArea);
+            reject(err);
+          }
+        }
+      }).then(() => {
+        if (button) {
+          const originalText = button.innerText;
+          button.innerText = 'Copied!';
+          setTimeout(() => { button.innerText = originalText; }, 1500);
+        }
+        return true;
+      }).catch((err) => {
+        console.error('Copy failed:', err);
+        if (button) {
+          button.innerText = 'Copy Failed';
+          setTimeout(() => { button.innerText = 'Copy'; }, 1500);
+        }
+        throw err;
+      });
+    }
+
+    // File input handlers
+    function setupFileInput(inputId, wrapperId, contentId, previewId = null) {
+      const input = document.getElementById(inputId);
+      const wrapper = document.getElementById(wrapperId);
+      const content = document.getElementById(contentId);
+      input.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+          wrapper.classList.add('has-file');
+          content.innerHTML = `<i class="fas fa-check-circle file-input-icon"></i>
+                              <div class="file-name">${file.name}</div>
+                              <div class="file-input-text">File selected successfully</div>`;
+          if (previewId && file.type.startsWith('image/')) {
+            const preview = document.getElementById(previewId);
+            const img = document.getElementById('diagramImage');
+            const reader = new FileReader();
+            reader.onload = function(e) {
+              img.src = e.target.result;
+              preview.style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+          }
+        }
+      });
+      // Drag and drop functionality
+      wrapper.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        wrapper.style.borderColor = '#2C3E50';
+        wrapper.style.backgroundColor = '#E5E7EB';
+      });
+      wrapper.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        wrapper.style.borderColor = '#D1D5DB';
+        wrapper.style.backgroundColor = '#F9FAFB';
+      });
+      wrapper.addEventListener('drop', function(e) {
+        e.preventDefault();
+        wrapper.style.borderColor = '#D1D5DB';
+        wrapper.style.backgroundColor = '#F9FAFB';
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+          input.files = files;
+          input.dispatchEvent(new Event('change'));
+        }
+      });
+    }
+    // Initialize file inputs
+    setupFileInput('templateFile', 'templateWrapper', 'templateContent');
+    setupFileInput('diagramFile', 'diagramWrapper', 'diagramContent', 'diagramPreview');
+
+    // Show alert function
+    function showAlert(message, type = 'error') {
+      const alertContainer = document.getElementById('alertContainer');
+      const alertClass = type === 'error' ? 'error-alert' : 'success-alert';
+      const icon = type === 'error' ? 'fas fa-exclamation-triangle' : 'fas fa-check-circle';
+      alertContainer.innerHTML = `<div class="${alertClass}">
+                                  <i class="${icon} me-2"></i>${message}
+                                </div>`;
+      setTimeout(() => {
+        alertContainer.innerHTML = '';
+      }, 5000);
+    }
+
+    // Form submission
+    document.getElementById("uploadForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const generateBtn = document.getElementById('generateBtn');
+      const loadingSpinner = document.getElementById('loadingSpinner');
+      const resultsContainer = document.getElementById('resultsContainer');
+      // Show loading state
+      generateBtn.disabled = true;
+      loadingSpinner.style.display = 'inline-block';
+      generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating...';
+      try {
+        const formData = new FormData(e.target);
+        const response = await fetch('http://89.168.92.241:8001/generate-markdown/', {
+          method: "POST",
+          body: formData,
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        rawMarkdown = await response.text();
+        console.log('Raw Markdown:', rawMarkdown); // For debugging
+        // Render Markdown to HTML
+        const renderedHtml = marked.parse(rawMarkdown);
+        const container = document.getElementById("markdownRendered");
+        container.innerHTML = `<div class="markdown-body">${renderedHtml}</div>`;
+        // Highlight code blocks
+        Prism.highlightAllUnder(container);
+        // Add "Copy" buttons to code blocks
+        container.querySelectorAll("pre").forEach((pre) => {
+          pre.classList.add("code-block");
+          const button = document.createElement("button");
+          button.innerText = "Copy";
+          button.className = "copy-btn";
+          button.onclick = () => {
+            const code = pre.querySelector("code") ? pre.querySelector("code").innerText : pre.innerText.replace(/\n$/, '');
+            copyToClipboard(code, button);
+          };
+          pre.appendChild(button);
+        });
+        // Show results
+        resultsContainer.style.display = 'block';
+        resultsContainer.scrollIntoView({ behavior: 'smooth' });
+        showAlert('Content generated successfully!', 'success');
+      } catch (error) {
+        console.error('Error:', error);
+        showAlert(`Error generating content: ${error.message}`);
+      } finally {
+        // Reset button state
+        generateBtn.disabled = false;
+        loadingSpinner.style.display = 'none';
+        generateBtn.innerHTML = '<i class="fas fa-magic me-2"></i>Generate Markdown';
+      }
+    });
+
+    // Copy all content (raw Markdown)
+    document.getElementById('copyAllBtn').addEventListener('click', async () => {
+      if (!rawMarkdown) {
+        showAlert('No content to copy', 'error');
+        return;
+      }
+      try {
+        await copyToClipboard(rawMarkdown);
+        showAlert('All Markdown copied to clipboard!', 'success');
+      } catch (err) {
+        showAlert('Failed to copy content to clipboard', 'error');
+      }
+    });
+  </script>
+</body>
+</html>

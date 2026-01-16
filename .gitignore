@@ -1,0 +1,160 @@
+# Python - Cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+ENV/
+env/
+.venv
+.env
+.env.local
+.env.*.local
+
+# IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# Testing & Coverage
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Logs
+*.log
+backend.log
+frontend.log
+logs/
+*.log.*
+
+# Docker
+.docker/
+
+# OCI & Cloud
+.oci/
+*.oci
+oci-config
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfstate.*.backup
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+!example.tfvars
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+.env.tf
+
+# Secrets & Credentials
+secrets/
+.ssh/
+*.pem
+*.key
+*credentials*
+auth/
+private/
+.kubeconfig
+.kube/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+.~*
+temp/
+tmp/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files (from your project)
+*.old
+*.back
+*.25*
+*.bak
+
+# Application specific
+template.docx
+*.docx
+.streamlit/
+output/
+results/
+data/
+!data/example.json
+
+# Node modules (if you have frontend with npm)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Development backups
+main.py.250923
+main.py.250929
+main.py.old
+content_generator.py.old
+prompt_templates.py.back
+index.html.25072401
+index.html.25072402
+index.html.250803
+index.html.250919
+index.html.25091902
+index.html.back
+index.html.old
+start.sh.old
+restart.sh.old
+
+# keep only active files, not backups
+.*.bak
