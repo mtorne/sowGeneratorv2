@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
-from services.oci_client import OCIGrokService
+from services.oci_client import OCIGenAIService
+
 from services.document_service import DocumentService
 from prompts.prompt_templates import PromptTemplates
 import logging
@@ -10,7 +11,7 @@ class ContentGeneratorService:
     """Service for generating content using AI with token management"""
     
     def __init__(self):
-        self.oci_service = OCIGrokService()
+        self.oci_service = OCIGenAIService()
         self.doc_service = DocumentService()
         self.prompts = PromptTemplates()
     
@@ -45,10 +46,12 @@ class ContentGeneratorService:
         application: str,
         scope: str,
         impdetails: str,
-        diagram_data_uri: Optional[str] = None
+        diagram_data_uri: Optional[str] = None,
+        llm_provider: str = "cohere" , # Default to Cohere if not specified
+        vision_provider: str = "meta.llama-3.2-90b-vision-instruct" # <--- NEW ARG
     ) -> Dict[str, str]:
         """
-        Generate content for all placeholders in the document
+        Generate content for all placeholders in the document using OCI GenAI.
         
         Args:
             document_text: Full text from the document
@@ -57,20 +60,35 @@ class ContentGeneratorService:
             scope: Project scope
             impdetails: implementation details
             diagram_data_uri: Optional diagram data URI
+            llm_provider: 'cohere' or 'llama'
             
         Returns:
             Dictionary mapping placeholders to generated content
         """
         placeholders = self.doc_service.extract_placeholders(document_text)
         replacements = {}
-        # Analyze diagram if provided
+        
+        # Normalize provider string
+        provider_type = "generic"
+        
+        if "cohere" in llm_provider.lower():
+            provider_type = "cohere"
+       
+            
+        logger.info(f"Selected Model: {llm_provider} | Detected Provider Type: {provider_type.upper()}")
+
+
+        # ---------------------------------------------------------
+        # 1. Analyze Diagram (Always uses OCI Llama 3.2 Vision)
+        # ---------------------------------------------------------
         diagram_description = ""
         if diagram_data_uri:
             try:
-                logger.info("Starting diagram analysis...")
+                logger.info("Starting diagram analysis with OCI Vision...")
                 full_diagram_description = self.oci_service.analyze_diagram(
                     diagram_data_uri,
-                    self.prompts.DIAGRAM_ANALYSIS
+                    self.prompts.DIAGRAM_ANALYSIS,
+                    model_id=vision_provider  # Use Vision model for diagram analysis
                 )
                 
                 # Truncate diagram description to prevent token issues
@@ -83,13 +101,15 @@ class ContentGeneratorService:
                 diagram_description = "Diagram analysis failed due to processing error."
                 replacements["DIAGRAM_DESCRIPTION"] = diagram_description
         
-        # Generate content for remaining placeholders
+        # ---------------------------------------------------------
+        # 2. Generate Content for Remaining Placeholders
+        # ---------------------------------------------------------
         for placeholder in placeholders:
             if placeholder == "DIAGRAM_DESCRIPTION":
                 continue  # Already handled
             
             try:
-                logger.info(f"Generating content for placeholder: {placeholder}")
+                logger.info(f"Generating content for {placeholder} using {provider_type}...")
                 
                 # Get the prompt for this placeholder
                 prompt = self.prompts.get_section_prompt(
@@ -106,23 +126,26 @@ class ContentGeneratorService:
                         placeholder, customer, application, impdetails, scope, short_diagram
                     )
                 
-                content = self.oci_service.generate_text_content(prompt)
+                # CALL OCI SERVICE WITH SELECTED PROVIDER
+                content = self.oci_service.generate_text_content(prompt, provider=provider_type,model_id=llm_provider)
+                
                 replacements[placeholder] = content
-                logger.info(f"Generated content for placeholder: {placeholder} (length: {len(content)} chars)")
+                logger.info(f"Generated content for {placeholder} (length: {len(content)} chars)")
                 
             except Exception as e:
                 error_msg = str(e)
                 logger.error(f"Error generating content for {placeholder}: {error_msg}")
                 
                 # Check if it's a token limit error
-                if "maximum prompt length" in error_msg.lower() or "462564 tokens" in error_msg:
-                    logger.warning(f"Token limit exceeded for {placeholder}, retrying with minimal context")
+                if "maximum prompt length" in error_msg.lower() or "400" in error_msg:
+                    logger.warning(f"Token limit/Error for {placeholder}, retrying with minimal context")
                     try:
                         # Retry with minimal diagram description
                         minimal_prompt = self.prompts.get_section_prompt(
                             placeholder, customer, application, impdetails, scope, ""
                         )
-                        content = self.oci_service.generate_text_content(minimal_prompt)
+                        # Retry call
+                        content = self.oci_service.generate_text_content(minimal_prompt, provider=provider_type,model_id=llm_provider)
                         replacements[placeholder] = content
                         logger.info(f"Successfully generated {placeholder} with minimal context")
                     except Exception as retry_error:

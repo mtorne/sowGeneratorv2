@@ -3,3 +3,6 @@ uvicorn
 python-docx
 openai
 python-multipart
+requests
+oci
+python-dotenv

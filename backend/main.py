@@ -164,6 +164,9 @@ async def generate_json(
     customer: str = Form(..., description="Customer name"),
     application: str = Form(..., description="Application name"),
     scope: str = Form(..., description="Project scope"),
+    impdetails: str = Form(..., description="Implementation Details"),
+    llm_provider: str = Form("openai"),  # <--- NEW FIELD, default to "openai"
+    vision_provider: str = Form("meta.llama-3.2-90b-vision-instruct"), # <--- NEW FIELD
     file: UploadFile = File(None, description="Optional DOCX template file"),
     diagram: UploadFile = File(None, description="Optional architecture diagram")
 ):
@@ -200,7 +203,7 @@ async def generate_json(
         
         # Generate content
         replacements = await content_generator.generate_content(
-            full_text, customer, application, scope, impdetails, diagram_data_uri
+            full_text, customer, application, scope, impdetails, diagram_data_uri,llm_provider=llm_provider, vision_provider=vision_provider    
         )
         
         # Replace placeholders in text
@@ -248,6 +251,8 @@ async def generate_html(
     application: str = Form(..., description="Application name"),
     scope: str = Form(..., description="Project scope"),
     impdetails: str = Form("", description="Implementation Details"),
+    llm_provider: str = Form("openai"),  # <--- NEW FIELD, default to "openai"
+    vision_provider: str = Form("meta.llama-3.2-90b-vision-instruct"), # <--- NEW FIELD
     file: UploadFile = File(None, description="Optional DOCX template file"),
     diagram: UploadFile = File(None, description="Optional architecture diagram")
 ):
@@ -314,7 +319,7 @@ async def generate_html(
 
         # Generate content
         replacements = await content_generator.generate_content(
-            full_text, customer, application, scope, impdetails, diagram_data_uri
+            full_text, customer, application, scope, impdetails, diagram_data_uri, llm_provider=llm_provider, vision_provider=vision_provider  
         )
 
         # Replace placeholders in text
@@ -531,6 +536,8 @@ async def generate_markdown(
     application: str = Form(..., description="Application name"),
     scope: str = Form(..., description="Project scope"),
     impdetails: str = Form(..., description="Implementation Details"),
+    llm_provider: str = Form("openai"),  # <--- NEW FIELD, default to "openai"
+    vision_provider: str = Form("meta.llama-3.2-90b-vision-instruct"), # <--- NEW FIELD
     file: UploadFile = File(None, description="Optional DOCX template file"),
     diagram: UploadFile = File(None, description="Optional architecture diagram")
 ):
@@ -597,7 +604,7 @@ async def generate_markdown(
 
         # Generate content
         replacements = await content_generator.generate_content(
-            full_text, customer, application, scope, impdetails, diagram_data_uri
+            full_text, customer, application, scope, impdetails, diagram_data_uri, llm_provider=llm_provider, vision_provider=vision_provider 
         )
 
         # Replace placeholders in text  
