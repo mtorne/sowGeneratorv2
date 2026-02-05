@@ -48,6 +48,17 @@ class OCIGenAIService:
             top_k=k_val    ,
             api_format=BaseChatRequest.API_FORMAT_GENERIC
         )
+
+    def _resolve_max_tokens(self, model_id: str) -> int:
+        """Pick a safe output token budget for the selected model."""
+        model = (model_id or "").lower()
+
+        # Gemini models usually need a higher generation budget for long SoW sections.
+        if "gemini" in model:
+            return int(getattr(oci_config, "gemini_max_output_tokens", 4096))
+
+        # Keep existing behavior for other generic models unless configured otherwise.
+        return int(getattr(oci_config, "max_output_tokens", 2000))
     
     def _build_cohere_request(self, prompt: str, max_tokens=2000) -> CohereChatRequest:
         """Builds a request specifically for Cohere models"""
@@ -75,7 +86,11 @@ class OCIGenAIService:
             if hasattr(response.data, 'chat_response'):
                 # Generic model response (Llama)
                 if hasattr(response.data.chat_response, 'choices'):
-                    return response.data.chat_response.choices[0].message.content[0].text
+                    content_parts = response.data.chat_response.choices[0].message.content
+                    text_parts = [part.text for part in content_parts if hasattr(part, "text") and part.text]
+                    if text_parts:
+                        return "\n".join(text_parts)
+                    return str(content_parts)
                 # Cohere model response
                 elif hasattr(response.data.chat_response, 'text'):
                     return response.data.chat_response.text
@@ -148,6 +163,7 @@ class OCIGenAIService:
             # Build Request with Override
             request = self._build_generic_request(
                 [message], 
+                max_tokens=self._resolve_max_tokens(target_model),
                 top_k_override=current_top_k
             )
             
