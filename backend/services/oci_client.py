@@ -86,10 +86,23 @@ class OCIGenAIService:
             if hasattr(response.data, 'chat_response'):
                 # Generic model response (Llama)
                 if hasattr(response.data.chat_response, 'choices'):
-                    content_parts = response.data.chat_response.choices[0].message.content
+                    first_choice = response.data.chat_response.choices[0]
+                    finish_reason = getattr(first_choice, "finish_reason", None)
+                    if finish_reason:
+                        logger.info(f"Model finish reason ({model_id}): {finish_reason}")
+
+                    content_parts = first_choice.message.content
                     text_parts = [part.text for part in content_parts if hasattr(part, "text") and part.text]
                     if text_parts:
-                        return "\n".join(text_parts)
+                        text_response = "\n".join(text_parts)
+
+                        # Most providers use a LENGTH/MAX_TOKENS-style reason when output was cut.
+                        if str(finish_reason).lower() in {"length", "max_tokens", "token_limit"}:
+                            logger.warning(
+                                f"Response may be truncated for model {model_id}: finish_reason={finish_reason}"
+                            )
+
+                        return text_response
                     return str(content_parts)
                 # Cohere model response
                 elif hasattr(response.data.chat_response, 'text'):
@@ -118,7 +131,11 @@ class OCIGenAIService:
         elif "grok" in target_model.lower():
              safe_top_k = 40 # Safe bet for Grok/OpenAI-like
         
-        request = self._build_generic_request([message], max_tokens=1500, top_k_override=safe_top_k)
+        request = self._build_generic_request(
+            [message],
+            max_tokens=self._resolve_max_tokens(target_model),
+            top_k_override=safe_top_k
+        )
         return self._call_model(target_model, request)
         #return self._call_model(self.model_llama_vision, request)
 
