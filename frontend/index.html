@@ -36,6 +36,80 @@
       overflow-x: hidden;
     }
 
+    .auth-screen {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .login-card {
+      width: 100%;
+      max-width: 420px;
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.12);
+    }
+
+    .login-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    .login-subtitle {
+      text-align: center;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+      font-size: 0.92rem;
+    }
+
+    .login-field {
+      margin-bottom: 16px;
+    }
+
+    .btn-login {
+      width: 100%;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent-green) 0%, #059669 100%);
+      color: white;
+      font-weight: 600;
+      padding: 12px;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+
+    .btn-login:hover {
+      transform: translateY(-1px);
+    }
+
+    .login-hint {
+      margin-top: 14px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    .app-shell {
+      display: none;
+    }
+
+    .logout-btn {
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.12);
+      color: white;
+      font-size: 0.82rem;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
     /* HEADER BAR */
     .top-bar {
       background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
@@ -361,6 +435,26 @@
   <script defer src="https://umami-jet-gamma.vercel.app/script.js" data-website-id="37cd202e-1cf1-4458-8b91-be8ad005828c"></script>
 </head>
 <body>
+  <div class="auth-screen" id="authScreen">
+    <div class="login-card">
+      <div class="login-title"><i class="fas fa-lock me-2"></i>Secure Access</div>
+      <div class="login-subtitle">Sign in to access the OCI Architecture Analyst workspace.</div>
+      <form id="loginForm">
+        <div class="login-field">
+          <input type="text" id="username" class="input-field" placeholder="Username" autocomplete="username" required>
+        </div>
+        <div class="login-field">
+          <input type="password" id="password" class="input-field" placeholder="Password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn-login">
+          <i class="fas fa-sign-in-alt me-2"></i>Login
+        </button>
+      </form>
+      <div class="login-hint">Default credentials: <strong>admin / admin123</strong></div>
+    </div>
+  </div>
+
+  <div class="app-shell" id="appShell">
 
   <!-- TOP BAR -->
   <div class="top-bar">
@@ -394,6 +488,10 @@
           <option value="openai.gpt-oss-120b">GPT-OSS 120B</option>
         </select>
       </div>
+
+      <button class="logout-btn" id="logoutBtn" type="button">
+        <i class="fas fa-right-from-bracket"></i> Logout
+      </button>
     </div>
   </div>
 
@@ -497,8 +595,46 @@
   <!-- ALERT TOAST -->
   <div class="alert-toast" id="alertToast"></div>
 
+  </div>
+
   <script>
     let rawMarkdown = '';
+    const AUTH_STORAGE_KEY = 'sow_generator_authenticated';
+    const AUTH_USER = 'admin';
+    const AUTH_PASSWORD = 'admin123';
+
+    function setAuthenticatedState(isAuthenticated) {
+      document.getElementById('authScreen').style.display = isAuthenticated ? 'none' : 'flex';
+      document.getElementById('appShell').style.display = isAuthenticated ? 'block' : 'none';
+    }
+
+    function initializeAuth() {
+      const isAuthenticated = sessionStorage.getItem(AUTH_STORAGE_KEY) === 'true';
+      setAuthenticatedState(isAuthenticated);
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+
+      if (username === AUTH_USER && password === AUTH_PASSWORD) {
+        sessionStorage.setItem(AUTH_STORAGE_KEY, 'true');
+        setAuthenticatedState(true);
+        showAlert('Login successful. Welcome!', 'success');
+        e.target.reset();
+      } else {
+        showAlert('Invalid username or password.', 'error');
+      }
+    });
+
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      sessionStorage.removeItem(AUTH_STORAGE_KEY);
+      setAuthenticatedState(false);
+      document.getElementById('resultsPanel').style.display = 'none';
+      document.getElementById('uploadForm').reset();
+      showAlert('You have been logged out.', 'success');
+    });
 
     // Copy Function
     function copyToClipboard(text, button = null) {
@@ -593,6 +729,8 @@
       copyToClipboard(rawMarkdown, document.getElementById('copyAllBtn'));
       showAlert('Markdown copied!', 'success');
     });
+
+    initializeAuth();
   </script>
 </body>
 </html>
