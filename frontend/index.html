@@ -432,7 +432,28 @@
       }
     }
   </style>
-  <script defer src="https://umami-jet-gamma.vercel.app/script.js" data-website-id="37cd202e-1cf1-4458-8b91-be8ad005828c"></script>
+  <script>
+    // Load analytics only in top-level browsing contexts to avoid cross-origin iframe errors.
+    (function loadUmamiAnalytics() {
+      let isTopLevel = false;
+
+      try {
+        isTopLevel = window.top === window.self;
+      } catch (error) {
+        isTopLevel = false;
+      }
+
+      if (!isTopLevel) {
+        return;
+      }
+
+      const analyticsScript = document.createElement('script');
+      analyticsScript.defer = true;
+      analyticsScript.src = 'https://umami-jet-gamma.vercel.app/script.js';
+      analyticsScript.dataset.websiteId = '37cd202e-1cf1-4458-8b91-be8ad005828c';
+      document.head.appendChild(analyticsScript);
+    })();
+  </script>
 </head>
 <body>
   <div class="auth-screen" id="authScreen">
