@@ -450,7 +450,7 @@
           <i class="fas fa-sign-in-alt me-2"></i>Login
         </button>
       </form>
-      <div class="login-hint">Default credentials: <strong>admin / admin123</strong></div>
+      <div class="login-hint">Use your assigned credentials to sign in.</div>
     </div>
   </div>
 
@@ -600,8 +600,15 @@
   <script>
     let rawMarkdown = '';
     const AUTH_STORAGE_KEY = 'sow_generator_authenticated';
-    const AUTH_USER = 'admin';
     const AUTH_PASSWORD = 'admin123';
+    const USERS = {
+      admin: { password: AUTH_PASSWORD, active: false },
+      marc: { password: AUTH_PASSWORD, active: true },
+      lukasz: { password: AUTH_PASSWORD, active: true },
+      emad: { password: AUTH_PASSWORD, active: true },
+      andrei: { password: AUTH_PASSWORD, active: true },
+      guest: { password: AUTH_PASSWORD, active: true }
+    };
 
     function setAuthenticatedState(isAuthenticated) {
       document.getElementById('authScreen').style.display = isAuthenticated ? 'none' : 'flex';
@@ -618,14 +625,22 @@
       const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value;
 
-      if (username === AUTH_USER && password === AUTH_PASSWORD) {
-        sessionStorage.setItem(AUTH_STORAGE_KEY, 'true');
-        setAuthenticatedState(true);
-        showAlert('Login successful. Welcome!', 'success');
-        e.target.reset();
-      } else {
+      const user = USERS[username.toLowerCase()];
+
+      if (!user || user.password !== password) {
         showAlert('Invalid username or password.', 'error');
+        return;
       }
+
+      if (!user.active) {
+        showAlert('This user account is deactivated.', 'error');
+        return;
+      }
+
+      sessionStorage.setItem(AUTH_STORAGE_KEY, 'true');
+      setAuthenticatedState(true);
+      showAlert(`Login successful. Welcome ${username}!`, 'success');
+      e.target.reset();
     });
 
     document.getElementById('logoutBtn').addEventListener('click', () => {
