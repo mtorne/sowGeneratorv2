@@ -471,6 +471,7 @@
           <i class="fas fa-sign-in-alt me-2"></i>Login
         </button>
       </form>
+      <div id="loginMessage" class="login-hint" style="display:none;"></div>
       <div class="login-hint">Use your assigned credentials to sign in.</div>
     </div>
   </div>
@@ -719,12 +720,24 @@
 
     // Alert Toast
     function showAlert(message, type = 'success') {
+      const authScreenVisible = document.getElementById('authScreen').style.display !== 'none';
+      const loginMessage = document.getElementById('loginMessage');
+
+      if (authScreenVisible && loginMessage) {
+        loginMessage.style.display = 'block';
+        loginMessage.textContent = message;
+        loginMessage.style.color = type === 'success' ? '#059669' : '#dc2626';
+      }
+
       const toast = document.getElementById('alertToast');
       toast.className = `alert-toast alert-${type}`;
       const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle';
       toast.innerHTML = `<i class="fas ${icon}"></i>${message}`;
-      toast.style.display = 'flex';
-      setTimeout(() => { toast.style.display = 'none'; }, 4000);
+
+      if (!authScreenVisible) {
+        toast.style.display = 'flex';
+        setTimeout(() => { toast.style.display = 'none'; }, 4000);
+      }
     }
 
     // Form Submit
