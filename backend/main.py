@@ -1,13 +1,15 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 import logging
 from config.settings import app_config
 from services.content_generator import ContentGeneratorService
+from services.oci_rag_client import OCIRAGService
 from services.document_service import DocumentService
 from utils.response_formatter import ResponseFormatter
 from fastapi.responses import PlainTextResponse
 from typing import Optional
+from pydantic import BaseModel
 import mimetypes
 
 # Configure logging
@@ -32,10 +34,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+class RAGChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+
+class RAGChatResponse(BaseModel):
+    answer: str
+    session_id: Optional[str] = None
+    citations: list[str] = []
+    guardrail_result: Optional[str] = None
+
 # Initialize services
 content_generator = ContentGeneratorService()
 document_service = DocumentService()
 response_formatter = ResponseFormatter()
+rag_service = OCIRAGService()
 
 # Default template with common placeholders
 DEFAULT_TEMPLATE = """
@@ -701,6 +716,21 @@ If your custom template fails, the system will use a default template with stand
     finally:
         if temp_file_path and app_config.temp_file_cleanup:
             document_service.cleanup_temp_file(temp_file_path)
+
+
+@app.post("/chat-rag/", response_model=RAGChatResponse)
+async def chat_rag(payload: RAGChatRequest):
+    """Chat endpoint backed by OCI Agent Runtime (RAG endpoint)."""
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message cannot be empty")
+
+    try:
+        result = rag_service.chat(message=message, session_id=payload.session_id)
+        return RAGChatResponse(**result)
+    except Exception as exc:
+        logger.error("RAG chat failed: %s", str(exc))
+        raise HTTPException(status_code=500, detail=f"RAG chat failed: {str(exc)}") from exc
 
 if __name__ == "__main__":
     import uvicorn

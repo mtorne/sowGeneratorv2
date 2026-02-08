@@ -16,7 +16,7 @@ cd /home/ubuntu/labs/sowGenTemplate/ai-doc-genv2/frontend || exit 1
 python3 -m http.server 8080 --bind 0.0.0.0 > "$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
 
-echo "✅ Both frontend (8080) and backend (8001) are running."
+echo "✅ Both frontend (8080) and backend (8000) are running."
 
 # Trap SIGTERM to stop both
 trap "kill $BACKEND_PID $FRONTEND_PID; exit 0" SIGTERM
