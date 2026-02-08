@@ -130,12 +130,9 @@
                 break;
               }
 
-              // 404/405 often means wrong route on current host; keep trying fallbacks.
-              if (![404, 405].includes(res.status)) {
-                throw new Error(payload.detail || `HTTP ${res.status}`);
-              }
-
-              lastError = payload.detail || `HTTP ${res.status} on ${base}${path}`;
+              // Any non-2xx can be an upstream/proxy mismatch on this candidate; keep trying.
+              const detail = payload.detail || payload.message || `HTTP ${res.status}`;
+              lastError = `${detail} on ${base}${path}`;
             } catch (err) {
               lastError = err.message;
             }
@@ -144,7 +141,12 @@
           if (data) break;
         }
 
-        if (!data) throw new Error(lastError);
+        if (!data) {
+          if ((lastError || '').includes('HTTP 501')) {
+            throw new Error('POST reached a static server (501 Unsupported method). Configure nginx /api proxy to FastAPI.');
+          }
+          throw new Error(lastError);
+        }
 
         sessionId = data.session_id || sessionId;
         sessionIdEl.textContent = sessionId || 'new';

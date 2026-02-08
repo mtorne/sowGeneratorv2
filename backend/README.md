@@ -194,18 +194,24 @@ The chat frontend now tries `/composer/api/chat-rag/`, then `/api/chat-rag/`, th
 For the errors you reported:
 - `POST https://sowgen.enrot.es/api/chat-rag/` -> `502`
 - `POST https://sowgen.enrot.es/chat-rag/` -> `405`
+- `POST https://sowgen.enrot.es/composer/api/chat-rag/` -> `501 Unsupported method`
 
 Typical causes and checks:
 
-1. **`405` on `/chat-rag/`**
+
+1. **`501 Unsupported method` on `/composer/api/chat-rag/`**
+   This usually means the request reached a static Python `http.server` upstream (frontend) instead of FastAPI.
+   Point `/composer/api/` (or `/api/`) to the FastAPI port and keep static frontend on a different location.
+
+2. **`405` on `/chat-rag/`**
    This is usually the static/frontend location in Nginx handling the request (not FastAPI).
    Use `/api/chat-rag/` or `/composer/api/chat-rag/` with a proxy location to backend.
 
-2. **`502` on `/api/chat-rag/`**
+3. **`502` on `/api/chat-rag/`**
    Nginx cannot reach the upstream FastAPI process (wrong port, process down, or bind mismatch).
    This repository's `scripts/start.sh` runs backend on **8000**, so if you use that script, proxy to `127.0.0.1:8000`.
 
-3. **Verify backend process/port**
+4. **Verify backend process/port**
    ```bash
    ss -ltnp | rg ':(8000|8001)\b'
    curl -i http://127.0.0.1:8000/chat-rag/ -X POST -H 'content-type: application/json' -d '{"message":"ping"}'
@@ -213,7 +219,7 @@ Typical causes and checks:
    ```
    One of those ports should answer from FastAPI (even with app-level error, it should not be Nginx HTML).
 
-4. **Match Nginx upstream to real backend port**
+5. **Match Nginx upstream to real backend port**
    If backend is on `8000`, use:
    ```nginx
    location /api/ {
@@ -226,13 +232,13 @@ Typical causes and checks:
    }
    ```
 
-5. **Validate and reload Nginx**
+6. **Validate and reload Nginx**
    ```bash
    nginx -t
    systemctl reload nginx
    ```
 
-6. **Check Nginx error logs while calling endpoint**
+7. **Check Nginx error logs while calling endpoint**
    ```bash
    tail -f /var/log/nginx/error.log
    ```
