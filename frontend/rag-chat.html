@@ -40,41 +40,42 @@
   </div>
 
   <script>
-    function resolveApiBases() {
+        function resolveApiBases() {
       const configured = localStorage.getItem('apiBaseUrl');
 
-      // Local file previews need an explicit backend host.
+      // 1. Local Dev (file://)
       if (window.location.protocol === 'file:') {
-        return [configured && configured.trim() ? configured.trim() : 'http://localhost:8001'];
+        return [configured && configured.trim() ? configured.trim() : 'http://localhost:8000'];
       }
 
-      const safeDefault = window.location.origin;
+      const safeDefault = window.location.origin; // https://sowgen.enrot.es
       const candidates = [];
 
+      // 2. Configured override (only if secure)
       if (configured && configured.trim()) {
         try {
           const url = new URL(configured, window.location.origin);
           if (!(window.location.protocol === 'https:' && url.protocol === 'http:')) {
             candidates.push(url.origin);
-          } else {
-            console.warn('Ignoring insecure apiBaseUrl on HTTPS page:', configured);
           }
-        } catch (_) {
-          // ignore invalid configured URL and continue with fallbacks
-        }
+        } catch (_) {}
       }
 
+      // 3. Always try the current origin (Nginx Proxy) FIRST
       candidates.push(safeDefault);
 
-      // Common deployment fallback: API may be exposed on 8000 or 8001 while UI is on 443/8080.
-      if (window.location.protocol.startsWith('http')) {
-        candidates.push(`${window.location.protocol}//${window.location.hostname}:8000`);
-        candidates.push(`${window.location.protocol}//${window.location.hostname}:8001`);
+      // 4. ONLY add port 8000/8001 if we are explicitly on localhost or using HTTP
+      // This prevents "https://domain.com:8000" which is invalid for your setup
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      
+      if (isLocalhost || window.location.protocol === 'http:') {
+         candidates.push(`${window.location.protocol}//${window.location.hostname}:8000`);
+         candidates.push(`${window.location.protocol}//${window.location.hostname}:8001`);
       }
 
-      // De-duplicate while preserving order.
       return [...new Set(candidates)];
     }
+
 
     const API_BASES = resolveApiBases();
     const messagesEl = document.getElementById('messages');
@@ -109,7 +110,7 @@
       sendBtn.disabled = true;
 
       try {
-        const endpointPaths = ['/composer/api/chat-rag/', '/api/chat-rag/', '/chat-rag/'];
+        const endpointPaths = ['/composer/api/chat-rag/'];
         let data = null;
         let lastError = 'RAG request failed';
 
