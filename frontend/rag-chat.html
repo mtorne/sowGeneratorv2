@@ -40,7 +40,32 @@
   </div>
 
   <script>
-    const API_BASE = localStorage.getItem('apiBaseUrl') || 'http://localhost:8001';
+    function resolveApiBase() {
+      const configured = localStorage.getItem('apiBaseUrl');
+
+      // Local file previews need an explicit backend host.
+      if (window.location.protocol === 'file:') {
+        return configured && configured.trim() ? configured.trim() : 'http://localhost:8001';
+      }
+
+      const safeDefault = window.location.origin;
+      if (!configured || configured.trim() === '') {
+        return safeDefault;
+      }
+
+      try {
+        const url = new URL(configured, window.location.origin);
+        if (window.location.protocol === 'https:' && url.protocol === 'http:') {
+          console.warn('Ignoring insecure apiBaseUrl on HTTPS page:', configured);
+          return safeDefault;
+        }
+        return url.origin;
+      } catch (_) {
+        return safeDefault;
+      }
+    }
+
+    const API_BASE = resolveApiBase();
     const messagesEl = document.getElementById('messages');
     const messageEl = document.getElementById('message');
     const sendBtn = document.getElementById('sendBtn');
