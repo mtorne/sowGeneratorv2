@@ -126,3 +126,34 @@ The application uses structured logging. Logs include:
 - Automatic cleanup of temporary files
 - Graceful degradation for failed operations
 
+
+
+### Nginx reverse proxy notes (`405 Not Allowed`)
+If you deploy frontend + backend behind Nginx, map an API prefix to FastAPI so POST requests do not hit static-file locations. Example:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name sowgen.enrot.es;
+
+    # Frontend static files
+    root /var/www/sowGeneratorv2/frontend;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Backend API (FastAPI/Uvicorn)
+    location /api/ {
+        proxy_pass http://127.0.0.1:8001/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+With this setup, frontend calls should use `/api/chat-rag/` (which this project now tries first).

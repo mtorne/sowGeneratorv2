@@ -40,32 +40,42 @@
   </div>
 
   <script>
-    function resolveApiBase() {
+    function resolveApiBases() {
       const configured = localStorage.getItem('apiBaseUrl');
 
       // Local file previews need an explicit backend host.
       if (window.location.protocol === 'file:') {
-        return configured && configured.trim() ? configured.trim() : 'http://localhost:8001';
+        return [configured && configured.trim() ? configured.trim() : 'http://localhost:8001'];
       }
 
       const safeDefault = window.location.origin;
-      if (!configured || configured.trim() === '') {
-        return safeDefault;
+      const candidates = [];
+
+      if (configured && configured.trim()) {
+        try {
+          const url = new URL(configured, window.location.origin);
+          if (!(window.location.protocol === 'https:' && url.protocol === 'http:')) {
+            candidates.push(url.origin);
+          } else {
+            console.warn('Ignoring insecure apiBaseUrl on HTTPS page:', configured);
+          }
+        } catch (_) {
+          // ignore invalid configured URL and continue with fallbacks
+        }
       }
 
-      try {
-        const url = new URL(configured, window.location.origin);
-        if (window.location.protocol === 'https:' && url.protocol === 'http:') {
-          console.warn('Ignoring insecure apiBaseUrl on HTTPS page:', configured);
-          return safeDefault;
-        }
-        return url.origin;
-      } catch (_) {
-        return safeDefault;
+      candidates.push(safeDefault);
+
+      // Common deployment fallback: API is exposed on 8000 while UI is on 443/8080.
+      if (window.location.protocol.startsWith('http')) {
+        candidates.push(`${window.location.protocol}//${window.location.hostname}:8000`);
       }
+
+      // De-duplicate while preserving order.
+      return [...new Set(candidates)];
     }
 
-    const API_BASE = resolveApiBase();
+    const API_BASES = resolveApiBases();
     const messagesEl = document.getElementById('messages');
     const messageEl = document.getElementById('message');
     const sendBtn = document.getElementById('sendBtn');
@@ -98,14 +108,42 @@
       sendBtn.disabled = true;
 
       try {
-        const res = await fetch(`${API_BASE}/chat-rag/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, session_id: sessionId })
-        });
+        const endpointPaths = ['/api/chat-rag/', '/chat-rag/'];
+        let data = null;
+        let lastError = 'RAG request failed';
 
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'RAG request failed');
+        for (const base of API_BASES) {
+          for (const path of endpointPaths) {
+            try {
+              const res = await fetch(`${base}${path}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message, session_id: sessionId })
+              });
+
+              const payload = await res.json().catch(() => ({}));
+
+              if (res.ok) {
+                data = payload;
+                localStorage.setItem('apiBaseUrl', base);
+                break;
+              }
+
+              // 404/405 often means wrong route on current host; keep trying fallbacks.
+              if (![404, 405].includes(res.status)) {
+                throw new Error(payload.detail || `HTTP ${res.status}`);
+              }
+
+              lastError = payload.detail || `HTTP ${res.status} on ${base}${path}`;
+            } catch (err) {
+              lastError = err.message;
+            }
+          }
+
+          if (data) break;
+        }
+
+        if (!data) throw new Error(lastError);
 
         sessionId = data.session_id || sessionId;
         sessionIdEl.textContent = sessionId || 'new';
