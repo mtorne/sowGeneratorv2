@@ -66,9 +66,10 @@
 
       candidates.push(safeDefault);
 
-      // Common deployment fallback: API is exposed on 8000 while UI is on 443/8080.
+      // Common deployment fallback: API may be exposed on 8000 or 8001 while UI is on 443/8080.
       if (window.location.protocol.startsWith('http')) {
         candidates.push(`${window.location.protocol}//${window.location.hostname}:8000`);
+        candidates.push(`${window.location.protocol}//${window.location.hostname}:8001`);
       }
 
       // De-duplicate while preserving order.
@@ -108,7 +109,7 @@
       sendBtn.disabled = true;
 
       try {
-        const endpointPaths = ['/api/chat-rag/', '/chat-rag/'];
+        const endpointPaths = ['/composer/api/chat-rag/', '/api/chat-rag/', '/chat-rag/'];
         let data = null;
         let lastError = 'RAG request failed';
 
