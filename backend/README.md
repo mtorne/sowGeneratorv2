@@ -203,20 +203,21 @@ Typical causes and checks:
 
 2. **`502` on `/api/chat-rag/`**
    Nginx cannot reach the upstream FastAPI process (wrong port, process down, or bind mismatch).
+   This repository's `scripts/start.sh` runs backend on **8001**, so if you use that script, proxy to `127.0.0.1:8001`.
 
 3. **Verify backend process/port**
    ```bash
    ss -ltnp | rg ':(8000|8001)\b'
-   curl -i http://127.0.0.1:8000/chat-rag/ -X POST -H 'content-type: application/json' -d '{"message":"ping"}'
    curl -i http://127.0.0.1:8001/chat-rag/ -X POST -H 'content-type: application/json' -d '{"message":"ping"}'
+   curl -i http://127.0.0.1:8000/chat-rag/ -X POST -H 'content-type: application/json' -d '{"message":"ping"}'
    ```
    One of those ports should answer from FastAPI (even with app-level error, it should not be Nginx HTML).
 
 4. **Match Nginx upstream to real backend port**
-   If backend is on `8000`, use:
+   If backend is on `8001`, use:
    ```nginx
    location /api/ {
-       proxy_pass http://127.0.0.1:8000/;
+       proxy_pass http://127.0.0.1:8001/;
        proxy_http_version 1.1;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
