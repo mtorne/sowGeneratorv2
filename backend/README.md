@@ -61,6 +61,14 @@ Returns generated content as formatted HTML
 ### GET /
 Health check endpoint
 
+### POST /chat-rag/
+RAG chat endpoint backed by OCI Generative AI Agent Runtime.
+
+Request body:
+```json
+{ "message": "your question", "session_id": "optional-session-id" }
+```
+
 ## Usage
 
 ### JSON Response
