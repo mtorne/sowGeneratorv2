@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List
 from uuid import uuid4
+
+from services.knowledge_access_service import KnowledgeAccessService
 class WorkflowStage(str, Enum):
     INIT = "INIT"
     PLAN_READY = "PLAN_READY"
@@ -33,8 +35,9 @@ class ValidationError(WorkflowError):
     pass
 class SOWWorkflowService:
     """Deterministic orchestration service for PLAN->RETRIEVE->ASSEMBLE->WRITE->REVIEW."""
-    def __init__(self) -> None:
+    def __init__(self, knowledge_access_service: KnowledgeAccessService | None = None) -> None:
         self._cases: Dict[str, SOWCase] = {}
+        self.knowledge_access_service = knowledge_access_service or KnowledgeAccessService()
     @staticmethod
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -90,7 +93,14 @@ class SOWWorkflowService:
         section_results = {}
         for spec in retrieval_specs:
             section_name = spec["section"]
-            candidates = kb_results.get(section_name, [])
+            candidates = kb_results.get(section_name)
+            if candidates is None:
+                candidates = self.knowledge_access_service.retrieve_section_clauses(
+                    section_name=section_name,
+                    filters=spec.get("filters", {}),
+                    intake=sow_case.intake,
+                    top_k=retrieve_input.get("top_k", 5),
+                )
             scoped = [c for c in candidates if c.get("metadata", {}).get("section") == section_name]
             valid = [
                 c
