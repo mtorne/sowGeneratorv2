@@ -54,6 +54,13 @@ class KnowledgeAccessService:
                     "chunk_id": candidate.get("chunk_id") or f"{section_name.lower()}-kb-{idx}",
                     "source_uri": candidate.get("source_uri") or "unknown://source",
                     "score": float(candidate.get("score", 0.5)),
+                    "clause_text": (
+                        candidate.get("clause_text")
+                        or candidate.get("text")
+                        or candidate.get("content")
+                        or candidate.get("summary")
+                        or ""
+                    ),
                     "metadata": {
                         # Force section scoping at normalization time so downstream
                         # validation is deterministic even if RAG returns a variant
@@ -123,6 +130,7 @@ class KnowledgeAccessService:
                     "chunk_id": f"citation-{idx}",
                     "source_uri": source_uri,
                     "score": 0.5,
+                    "clause_text": f"Evidence reference from citation source {source_uri}.",
                     "metadata": {},
                 }
             )
@@ -145,6 +153,7 @@ class KnowledgeAccessService:
                     "chunk_id": f"uri-{idx}",
                     "source_uri": source_uri,
                     "score": 0.4,
+                    "clause_text": f"Evidence reference derived from answer URI {source_uri}.",
                     "metadata": {},
                 }
             )

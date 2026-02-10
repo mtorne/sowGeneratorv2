@@ -171,6 +171,7 @@ class SOWWorkflowService:
                 "section_intent": intent_by_section.get(section, ""),
                 "order": [c["chunk_id"] for c in ordered],
                 "primary_clause_ids": primary,
+                "primary_clauses": ordered[:2],
                 "alternatives": alternatives,
                 "conflicts": [],
             }
@@ -192,10 +193,26 @@ class SOWWorkflowService:
             clause_ids = config["primary_clause_ids"]
             clause_id_text = [str(clause_id) for clause_id in clause_ids]
             section_intent = config.get("section_intent") or "Define terms and obligations for this section"
+            evidence_lines = []
+            for clause in config.get("primary_clauses", []):
+                raw_text = (clause.get("clause_text") or "").strip()
+                if raw_text:
+                    evidence_lines.append(raw_text)
+
+            evidence_lines = evidence_lines[:2]
+
+            if evidence_lines:
+                body = " ".join(evidence_lines)
+            else:
+                body = (
+                    "The available clause evidence is limited to references, so this section should be refined "
+                    "after validating the source clause text from the knowledge base."
+                )
+
             text = (
                 f"{section}: This section is drafted in {style} tone and is intended to {section_intent.lower()}. "
-                f"The draft is grounded in approved clauses {', '.join(clause_id_text)} and translates them into client-specific obligations, "
-                f"scope boundaries, and delivery expectations. Assumptions and constraints should be validated during review before approval."
+                f"{body} "
+                f"(Grounded in clause IDs: {', '.join(clause_id_text)}.)"
             )
             if any(word.lower() in text.lower() for word in prohibited):
                 raise ValidationError(f"WRITE produced prohibited commitment language in section '{section}'")
