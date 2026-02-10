@@ -15,6 +15,7 @@ class KnowledgeAccessService:
 
     def __init__(self, rag_service: Optional[OCIRAGService] = None):
         self.rag_service = rag_service or OCIRAGService()
+        self._session_id: Optional[str] = None
 
     def retrieve_section_clauses(
         self,
@@ -32,8 +33,18 @@ class KnowledgeAccessService:
           - metadata: {section, clause_type, risk_level}
         """
         prompt = self._build_prompt(section_name=section_name, filters=filters, intake=intake, top_k=top_k)
-        response = self.rag_service.chat(message=prompt)
+        response = self.rag_service.chat(message=prompt, session_id=self._session_id)
+        self._session_id = response.get("session_id") or self._session_id
         candidates = self._extract_candidates(response)
+
+        logger.info(
+            "RAG retrieval diagnostics | section=%s | session=%s | answer_chars=%s | citations=%s | raw_candidates=%s",
+            section_name,
+            self._session_id,
+            len((response or {}).get("answer", "")),
+            len((response or {}).get("citations", []) or []),
+            len(candidates),
+        )
 
         normalized: List[Dict[str, Any]] = []
         for idx, candidate in enumerate(candidates[:top_k], start=1):
@@ -87,7 +98,15 @@ class KnowledgeAccessService:
             logger.warning("Could not parse retrieval response as JSON")
 
         # Fall back to citation-derived candidates when the answer is not strict JSON.
-        return KnowledgeAccessService._candidates_from_citations(response)
+        citation_candidates = KnowledgeAccessService._candidates_from_citations(response)
+        if citation_candidates:
+            return citation_candidates
+
+        # Final fallback: extract URI-like references from free-form answer text.
+        uri_candidates = KnowledgeAccessService._candidates_from_answer_uris(answer_text)
+        if uri_candidates:
+            logger.info("Using %s URI-derived candidates from answer text", len(uri_candidates))
+        return uri_candidates
 
     @staticmethod
     def _candidates_from_citations(response: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -107,5 +126,24 @@ class KnowledgeAccessService:
 
         if candidates:
             logger.info("Using %s citation-derived candidates due to non-JSON RAG answer", len(candidates))
+
+        return candidates
+
+    @staticmethod
+    def _candidates_from_answer_uris(answer_text: str) -> List[Dict[str, Any]]:
+        uri_pattern = re.compile(r"(oci://[^\s,;]+|https?://[^\s,;]+)")
+        uris = uri_pattern.findall(answer_text or "")
+        unique_uris = list(dict.fromkeys(uris))
+
+        candidates: List[Dict[str, Any]] = []
+        for idx, source_uri in enumerate(unique_uris, start=1):
+            candidates.append(
+                {
+                    "chunk_id": f"uri-{idx}",
+                    "source_uri": source_uri,
+                    "score": 0.4,
+                    "metadata": {},
+                }
+            )
 
         return candidates
