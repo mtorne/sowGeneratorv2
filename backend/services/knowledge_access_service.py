@@ -33,7 +33,7 @@ class KnowledgeAccessService:
         """
         prompt = self._build_prompt(section_name=section_name, filters=filters, intake=intake, top_k=top_k)
         response = self.rag_service.chat(message=prompt)
-        candidates = self._extract_candidates(response.get("answer", ""))
+        candidates = self._extract_candidates(response)
 
         normalized: List[Dict[str, Any]] = []
         for idx, candidate in enumerate(candidates[:top_k], start=1):
@@ -68,9 +68,10 @@ class KnowledgeAccessService:
         )
 
     @staticmethod
-    def _extract_candidates(answer_text: str) -> List[Dict[str, Any]]:
+    def _extract_candidates(response: Dict[str, Any]) -> List[Dict[str, Any]]:
+        answer_text = (response or {}).get("answer", "")
         if not answer_text:
-            return []
+            return KnowledgeAccessService._candidates_from_citations(response)
 
         # Try fenced JSON first.
         fenced = re.search(r"```json\s*(\{.*?\})\s*```", answer_text, re.DOTALL)
@@ -85,4 +86,26 @@ class KnowledgeAccessService:
         except Exception:
             logger.warning("Could not parse retrieval response as JSON")
 
-        return []
+        # Fall back to citation-derived candidates when the answer is not strict JSON.
+        return KnowledgeAccessService._candidates_from_citations(response)
+
+    @staticmethod
+    def _candidates_from_citations(response: Dict[str, Any]) -> List[Dict[str, Any]]:
+        citations = (response or {}).get("citations", []) or []
+        candidates: List[Dict[str, Any]] = []
+
+        for idx, citation in enumerate(citations, start=1):
+            source_uri = str(citation)
+            candidates.append(
+                {
+                    "chunk_id": f"citation-{idx}",
+                    "source_uri": source_uri,
+                    "score": 0.5,
+                    "metadata": {},
+                }
+            )
+
+        if candidates:
+            logger.info("Using %s citation-derived candidates due to non-JSON RAG answer", len(candidates))
+
+        return candidates

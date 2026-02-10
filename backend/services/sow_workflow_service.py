@@ -95,12 +95,17 @@ class SOWWorkflowService:
             section_name = spec["section"]
             candidates = kb_results.get(section_name)
             if candidates is None:
-                candidates = self.knowledge_access_service.retrieve_section_clauses(
-                    section_name=section_name,
-                    filters=spec.get("filters", {}),
-                    intake=sow_case.intake,
-                    top_k=retrieve_input.get("top_k", 5),
-                )
+                try:
+                    candidates = self.knowledge_access_service.retrieve_section_clauses(
+                        section_name=section_name,
+                        filters=spec.get("filters", {}),
+                        intake=sow_case.intake,
+                        top_k=retrieve_input.get("top_k", 5),
+                    )
+                except Exception as exc:
+                    raise ValidationError(
+                        f"RETRIEVE failed for section '{section_name}' from knowledge service: {str(exc)}"
+                    ) from exc
             scoped = [c for c in candidates if c.get("metadata", {}).get("section") == section_name]
             valid = [
                 c
@@ -112,7 +117,10 @@ class SOWWorkflowService:
             ]
             section_results[section_name] = valid[: retrieve_input.get("top_k", 5)]
         if not all(section_results.values()):
-            raise ValidationError("RETRIEVE produced insufficient section coverage")
+            raise ValidationError(
+                "RETRIEVE produced insufficient section coverage. "
+                "Provide kb_results explicitly in payload for this run or verify OCI Agent endpoint returns citations/JSON candidates."
+            )
         artifact = self._append_artifact(
             sow_case,
             WorkflowStage.RETRIEVED,
