@@ -170,6 +170,10 @@
         <button onclick="fetchArtifact('DRAFTED')">Get DRAFTED artifact</button>
         <button onclick="fetchArtifact('REVIEWED')">Get REVIEWED artifact</button>
       </div>
+      <div class="btns">
+        <button onclick="openDocumentMarkdown()">Open Document (Markdown)</button>
+        <button onclick="openDocumentHtml()">Open Document (HTML)</button>
+      </div>
     </div>
 
     <div class="card">
@@ -363,6 +367,16 @@
     async function fetchArtifact(stage) {
       if (!caseId()) return alert('Enter a Case ID');
       await request(`/sow-cases/${caseId()}/artifacts/${stage}`);
+    }
+
+    function openDocumentMarkdown() {
+      if (!caseId()) return alert('Enter a Case ID');
+      window.open(`${apiBase()}/sow-cases/${caseId()}/document.md`, '_blank', 'noopener');
+    }
+
+    function openDocumentHtml() {
+      if (!caseId()) return alert('Enter a Case ID');
+      window.open(`${apiBase()}/sow-cases/${caseId()}/document.html`, '_blank', 'noopener');
     }
 
     function loadPlanTemplate() {

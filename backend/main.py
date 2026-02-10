@@ -307,6 +307,25 @@ async def get_artifact(case_id: str, stage: WorkflowStage):
     except WorkflowValidationError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+
+
+@app.get("/sow-cases/{case_id}/document.md")
+async def get_case_document_markdown(case_id: str):
+    try:
+        content = sow_workflow_service.render_document_markdown(case_id)
+        return PlainTextResponse(content=content)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/sow-cases/{case_id}/document.html")
+async def get_case_document_html(case_id: str):
+    try:
+        content = sow_workflow_service.render_document_html(case_id)
+        return HTMLResponse(content=content)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 @app.post("/generate/")
 async def generate_json(
     customer: str = Form(..., description="Customer name"),
