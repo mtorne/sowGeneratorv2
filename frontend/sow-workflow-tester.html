@@ -104,7 +104,8 @@
     <div class="card grid grid-3">
       <div>
         <label>API Base URL</label>
-        <input id="baseUrl" value="http://localhost:8001" />
+        <input id="baseUrl" placeholder="Auto-detected (recommended)" />
+        <div class="hint">If page is HTTPS, this auto-forces HTTPS to avoid mixed-content blocking.</div>
       </div>
       <div>
         <label>Case ID</label>
@@ -181,7 +182,34 @@
     const outputEl = document.getElementById('output');
     const statusEl = document.getElementById('statusPill');
 
-    function apiBase() { return document.getElementById('baseUrl').value.replace(/\/$/, ''); }
+    function detectDefaultBaseUrl() {
+      const origin = window.location.origin;
+      if (window.location.protocol === 'https:') {
+        return `${origin}/api`;
+      }
+      return 'http://localhost:8001';
+    }
+
+    function normalizeBaseUrl(rawValue) {
+      let base = (rawValue || '').trim();
+      if (!base) {
+        base = detectDefaultBaseUrl();
+      }
+
+      if (window.location.protocol === 'https:' && base.startsWith('http://')) {
+        base = `https://${base.slice('http://'.length)}`;
+      }
+
+      return base.replace(/\/$/, '');
+    }
+
+    function apiBase() {
+      const input = document.getElementById('baseUrl');
+      const normalized = normalizeBaseUrl(input.value);
+      input.value = normalized;
+      localStorage.setItem('sowWorkflowBaseUrl', normalized);
+      return normalized;
+    }
     function caseId() { return document.getElementById('caseId').value.trim(); }
     function setStage(stage) {
       document.getElementById('currentStage').value = stage || 'UNKNOWN';
@@ -195,6 +223,13 @@
       if (data?.case?.stage) setStage(data.case.stage);
       if (data?.artifact?.stage) setStage(data.artifact.stage);
       if (data?.case?.case_id) document.getElementById('caseId').value = data.case.case_id;
+    }
+
+
+    function initializeBaseUrl() {
+      const input = document.getElementById('baseUrl');
+      const saved = localStorage.getItem('sowWorkflowBaseUrl');
+      input.value = normalizeBaseUrl(saved || input.value);
     }
 
     function getPayload() {
@@ -285,6 +320,7 @@
       });
     }
 
+    initializeBaseUrl();
     loadPlanTemplate();
     setStage('INIT');
   </script>
