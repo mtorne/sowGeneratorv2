@@ -105,7 +105,7 @@
       <div>
         <label>API Base URL</label>
         <input id="baseUrl" placeholder="Auto-detected (recommended)" />
-        <div class="hint">If page is HTTPS, this auto-forces HTTPS to avoid mixed-content blocking.</div>
+        <div class="hint">Use same-origin proxy URLs (`/api` or `/composer/api`) to avoid CORS/TLS issues with direct :8000 calls.</div>
       </div>
       <div>
         <label>Case ID</label>
@@ -184,9 +184,16 @@
 
     function detectDefaultBaseUrl() {
       const origin = window.location.origin;
+      const path = window.location.pathname || '/';
+
       if (window.location.protocol === 'https:') {
+        // If UI is served under /composer/, prefer /composer/api first.
+        if (path.startsWith('/composer/')) {
+          return `${origin}/composer/api`;
+        }
         return `${origin}/api`;
       }
+
       return 'http://localhost:8001';
     }
 
@@ -238,14 +245,60 @@
       return { payload: JSON.parse(raw) };
     }
 
+    function fallbackBases(primaryBase) {
+      const origin = window.location.origin;
+      const list = [primaryBase];
+
+      if (window.location.protocol === 'https:') {
+        const candidates = [`${origin}/composer/api`, `${origin}/api`];
+        for (const item of candidates) {
+          if (!list.includes(item)) list.push(item);
+        }
+      }
+
+      return list;
+    }
+
     async function request(path, method = 'GET', body = null) {
       const options = { method, headers: { 'Content-Type': 'application/json' } };
       if (body) options.body = JSON.stringify(body);
-      const res = await fetch(`${apiBase()}${path}`, options);
-      let data;
-      try { data = await res.json(); } catch { data = { raw: await res.text() }; }
-      setResult(res.ok, res.status, data);
-      return { res, data };
+
+      const bases = fallbackBases(apiBase());
+      let lastError = null;
+
+      for (const base of bases) {
+        try {
+          const res = await fetch(`${base}${path}`, options);
+          let data;
+          try { data = await res.json(); } catch { data = { raw: await res.text() }; }
+
+          if (!res.ok) {
+            setResult(false, res.status, {
+              ...data,
+              _request_base: base,
+              _tip: 'If this is a network/CORS failure, use /api or /composer/api behind nginx and avoid direct :8000 from browser.'
+            });
+            return { res, data };
+          }
+
+          if (base !== document.getElementById('baseUrl').value) {
+            document.getElementById('baseUrl').value = base;
+            localStorage.setItem('sowWorkflowBaseUrl', base);
+          }
+
+          setResult(true, res.status, { ...data, _request_base: base });
+          return { res, data };
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      setResult(false, 0, {
+        error: String(lastError || 'Network request failed'),
+        _tip: 'Browser could not reach API. Use same-origin nginx proxy URL (/api or /composer/api), not https://<domain>:8000.',
+        attempted_bases: bases,
+      });
+      return { res: null, data: null };
     }
 
     async function createCase() {
