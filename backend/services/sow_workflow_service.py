@@ -132,12 +132,15 @@ class SOWWorkflowService:
         sow_case = self.get_case(case_id)
         self._ensure_stage(sow_case, [WorkflowStage.RETRIEVED, WorkflowStage.ASSEMBLED])
         retrieval = self.get_latest_artifact(case_id, WorkflowStage.RETRIEVED).payload["retrieval_set"]
+        plan_sections = self.get_latest_artifact(case_id, WorkflowStage.PLAN_READY).payload["plan"]["sections"]
+        intent_by_section = {item.get("name"): item.get("intent", "") for item in plan_sections}
         blueprint = {}
         for section, clauses in retrieval.items():
             ordered = sorted(clauses, key=lambda c: c.get("score", 0), reverse=True)
             primary = [c["chunk_id"] for c in ordered[:2]]
             alternatives = [c["chunk_id"] for c in ordered[2:4]]
             blueprint[section] = {
+                "section_intent": intent_by_section.get(section, ""),
                 "order": [c["chunk_id"] for c in ordered],
                 "primary_clause_ids": primary,
                 "alternatives": alternatives,
@@ -160,9 +163,11 @@ class SOWWorkflowService:
         for section, config in blueprint.items():
             clause_ids = config["primary_clause_ids"]
             clause_id_text = [str(clause_id) for clause_id in clause_ids]
+            section_intent = config.get("section_intent") or "Define terms and obligations for this section"
             text = (
-                f"{section}: This section is drafted in {style} tone based on approved clause inputs "
-                f"{', '.join(clause_id_text)}."
+                f"{section}: This section is drafted in {style} tone and is intended to {section_intent.lower()}. "
+                f"The draft is grounded in approved clauses {', '.join(clause_id_text)} and translates them into client-specific obligations, "
+                f"scope boundaries, and delivery expectations. Assumptions and constraints should be validated during review before approval."
             )
             if any(word.lower() in text.lower() for word in prohibited):
                 raise ValidationError(f"WRITE produced prohibited commitment language in section '{section}'")

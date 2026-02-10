@@ -144,7 +144,7 @@
       <label>Payload JSON (used for PLAN / RETRIEVE / WRITE / REVIEW)</label>
       <textarea id="payload"></textarea>
       <div class="btns">
-        <button onclick="loadPlanTemplate()">Load PLAN template</button>
+        <button onclick="loadPlanTemplate()">Load Complete SoW PLAN template</button>
         <button onclick="loadRetrieveTemplate()">Load RETRIEVE template</button>
         <button onclick="loadWriteTemplate()">Load WRITE template</button>
         <button onclick="loadReviewTemplate()">Load REVIEW template</button>
@@ -384,10 +384,62 @@
         industry: document.getElementById('industry').value || 'Retail',
         region: document.getElementById('region').value || 'US',
         sections: [
-          { name: 'Scope', intent: 'Define deliverables and boundaries', clause_type: 'scope', max_risk: 'medium' },
-          { name: 'Commercials', intent: 'Define pricing and payment terms', clause_type: 'commercial', max_risk: 'medium' }
+          { name: 'DISCLAIMER', intent: 'State legal disclaimers, usage boundaries, and interpretation notes for this SoW', clause_type: 'legal_notice', max_risk: 'high' },
+          { name: 'TABLE OF CONTENTS', intent: 'Provide a complete navigable index of sections and subsections', clause_type: 'structure', max_risk: 'low' },
+
+          { name: 'STATEMENT OF WORK VERSION HISTORY', intent: 'Track version number, change summary, author, and approval progression', clause_type: 'governance', max_risk: 'low' },
+          { name: 'STATUS AND NEXT STEPS', intent: 'Summarize current project status and immediate actions after this SoW version', clause_type: 'status', max_risk: 'low' },
+          { name: 'PROJECT PARTICIPANTS', intent: 'List customer and provider participants, roles, and contact responsibilities', clause_type: 'responsibility', max_risk: 'medium' },
+
+          { name: 'PROJECT FRAMEWORK', intent: 'Define delivery governance model, engagement framework, and operating principles', clause_type: 'framework', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Color Codes', intent: 'Define project status color coding conventions and interpretation rules', clause_type: 'framework', max_risk: 'low' },
+          { name: 'PROJECT FRAMEWORK / Ways of Working', intent: 'Define collaboration model, cadence, communication channels, and delivery mechanics', clause_type: 'framework', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Required Contribution From Cegid', intent: 'Define required customer-side staffing, access, and prerequisite contributions', clause_type: 'responsibility', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Expected Deliverables From Oracle Labs', intent: 'Define Oracle Labs deliverables, ownership, and expected output artifacts', clause_type: 'deliverables', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Cloud Environment Used For This Project', intent: 'Define cloud environment boundaries, tenancy context, and workload placement', clause_type: 'environment', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Optional Oracle Access Into The Cegid Owned Tenancy', intent: 'Define optional access model, controls, and approval conditions for tenancy access', clause_type: 'security_access', max_risk: 'high' },
+          { name: 'PROJECT FRAMEWORK / OCI Technical Getting Started Info', intent: 'Document onboarding prerequisites, technical setup steps, and initial operating guidance', clause_type: 'onboarding', max_risk: 'low' },
+
+          { name: 'CEGID COMPANY PROFILE', intent: 'Describe client company context, business model, and relevant organizational background', clause_type: 'client_profile', max_risk: 'low' },
+          { name: 'IN SCOPE APPLICATION: SOVEREIGN XRP', intent: 'Define in-scope application context, boundaries, and business criticality', clause_type: 'scope', max_risk: 'medium' },
+
+          { name: 'PROJECT OVERVIEW', intent: 'Provide end-to-end project summary, objectives, and execution framing', clause_type: 'overview', max_risk: 'medium' },
+          { name: 'PROJECT OVERVIEW / Scope', intent: 'Define detailed in-scope and out-of-scope work packages for this engagement', clause_type: 'scope', max_risk: 'medium' },
+          { name: 'PROJECT OVERVIEW / Major Project Milestones', intent: 'Define key milestones, target dates, and dependency checkpoints', clause_type: 'timeline', max_risk: 'medium' },
+          { name: 'PROJECT OVERVIEW / Responsibilities Matrix', intent: 'Define RACI mapping for all major streams and delivery accountabilities', clause_type: 'responsibility', max_risk: 'medium' },
+          { name: 'PROJECT OVERVIEW / Acceptance Criteria', intent: 'Define objective acceptance criteria, completion evidence, and sign-off conditions', clause_type: 'acceptance', max_risk: 'high' },
+          { name: 'PROJECT OVERVIEW / Major Technical Sessions Held', intent: 'Document major technical workshops, decisions, and session outcomes', clause_type: 'governance', max_risk: 'low' },
+
+          { name: 'CURRENT STATE ARCHITECTURE', intent: 'Describe existing baseline architecture and operating context before transformation', clause_type: 'architecture_current', max_risk: 'medium' },
+          { name: 'CURRENT STATE ARCHITECTURE / Current State Architecture - Diagram', intent: 'Provide current-state architecture diagram and reference structure', clause_type: 'architecture_current', max_risk: 'low' },
+          { name: 'CURRENT STATE ARCHITECTURE / Current State Architecture - Description', intent: 'Describe current-state components, integration flows, and operational characteristics', clause_type: 'architecture_current', max_risk: 'medium' },
+
+          { name: 'CURRENTLY USED TECHNOLOGY STACK', intent: 'List currently used platforms, products, runtimes, and integration technologies', clause_type: 'technology_stack', max_risk: 'low' },
+          { name: 'CURRENTLY USED TECHNOLOGY STACK / Current State Architecture -', intent: 'Map technology stack elements to current-state architecture positioning', clause_type: 'technology_stack', max_risk: 'low' },
+
+          { name: 'FUTURE STATE ARCHITECTURE', intent: 'Define target architecture state and modernization outcomes for approved scope', clause_type: 'architecture_target', max_risk: 'high' },
+          { name: 'FUTURE STATE ARCHITECTURE / Target Architecture Diagram', intent: 'Provide future-state target architecture diagram and component layout', clause_type: 'architecture_target', max_risk: 'medium' },
+          { name: 'FUTURE STATE ARCHITECTURE / Architecture Deployment Overview', intent: 'Describe deployment topology, environments, and release architecture approach', clause_type: 'deployment', max_risk: 'medium' },
+          { name: 'FUTURE STATE ARCHITECTURE / Architecture Components', intent: 'Define target architecture components, responsibilities, and interactions', clause_type: 'architecture_target', max_risk: 'medium' },
+          { name: 'FUTURE STATE ARCHITECTURE / Implementation Details and Configuration Settings', intent: 'Document implementation settings, configuration baselines, and technical controls', clause_type: 'implementation', max_risk: 'high' },
+          { name: 'FUTURE STATE ARCHITECTURE / OCI Service Sizing and Amounts', intent: 'Define OCI service sizing assumptions, capacity estimates, and quantity allocations', clause_type: 'capacity', max_risk: 'medium' },
+
+          { name: 'SOVEREIGN XRP OFFBOARDING', intent: 'Define offboarding scope, closure activities, and operational handover expectations', clause_type: 'offboarding', max_risk: 'medium' },
+          { name: 'SOVEREIGN XRP OFFBOARDING / Oracle Labs Team – Offboarding', intent: 'Define Oracle Labs offboarding tasks, deliverables, and knowledge transfer responsibilities', clause_type: 'offboarding', max_risk: 'medium' },
+          { name: 'SOVEREIGN XRP OFFBOARDING / Closing Feedback', intent: 'Capture final lessons learned, stakeholder feedback, and closure recommendations', clause_type: 'closure', max_risk: 'low' }
         ],
-        risk_checks: ['liability_cap_present', 'payment_terms_defined']
+        risk_checks: [
+          'disclaimer_present',
+          'version_history_complete',
+          'scope_boundaries_defined',
+          'milestones_defined',
+          'responsibility_matrix_defined',
+          'acceptance_criteria_defined',
+          'security_access_controls_defined',
+          'implementation_configuration_defined',
+          'capacity_sizing_defined',
+          'offboarding_plan_defined'
+        ]
       });
     }
 
