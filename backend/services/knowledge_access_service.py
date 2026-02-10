@@ -37,6 +37,20 @@ class KnowledgeAccessService:
         self._session_id = response.get("session_id") or self._session_id
         candidates = self._extract_candidates(response)
 
+        # If strict prompt yields no usable candidates, run one relaxed retry
+        # to recover references from less-structured responses.
+        if not candidates:
+            retry_prompt = self._build_relaxed_prompt(
+                section_name=section_name,
+                filters=filters,
+                intake=intake,
+                top_k=top_k,
+            )
+            retry_response = self.rag_service.chat(message=retry_prompt, session_id=self._session_id)
+            self._session_id = retry_response.get("session_id") or self._session_id
+            candidates = self._extract_candidates(retry_response)
+            response = retry_response
+
         logger.info(
             "RAG retrieval diagnostics | section=%s | session=%s | answer_chars=%s | citations=%s | raw_candidates=%s",
             section_name,
@@ -103,6 +117,19 @@ class KnowledgeAccessService:
         )
 
     @staticmethod
+    def _build_relaxed_prompt(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any], top_k: int) -> str:
+        return (
+            "Retrieve SoW clauses from the knowledge base for the requested section. "
+            "If strict JSON is not possible, still return best-effort candidates as JSON. "
+            "Include clause_text whenever available and include citations/URIs if clause text is missing.\n"
+            f"Section: {section_name}\n"
+            f"TopK: {top_k}\n"
+            f"Filters: {json.dumps(filters)}\n"
+            f"Client Context: {json.dumps({'industry': intake.get('industry'), 'region': intake.get('region'), 'document_type': intake.get('document_type')})}\n"
+            "Output JSON with key candidates."
+        )
+
+    @staticmethod
     def _extract_candidates(response: Dict[str, Any]) -> List[Dict[str, Any]]:
         answer_text = (response or {}).get("answer", "")
         if not answer_text:
@@ -115,7 +142,14 @@ class KnowledgeAccessService:
         try:
             parsed = json.loads(raw_json)
             if isinstance(parsed, dict):
-                return parsed.get("candidates", []) or []
+                parsed_candidates = parsed.get("candidates", []) or []
+                if parsed_candidates:
+                    return parsed_candidates
+                # If strict JSON response has empty list, still try citations/URIs.
+                citation_candidates = KnowledgeAccessService._candidates_from_citations(response)
+                if citation_candidates:
+                    return citation_candidates
+                return KnowledgeAccessService._candidates_from_answer_uris(answer_text)
             if isinstance(parsed, list):
                 return parsed
         except Exception:
