@@ -46,6 +46,13 @@ class KnowledgeAccessService:
             len(candidates),
         )
 
+        if not candidates:
+            logger.warning(
+                "No normalized candidates for section=%s. Raw answer preview=%s",
+                section_name,
+                (response or {}).get("answer", "")[:240],
+            )
+
         normalized: List[Dict[str, Any]] = []
         for idx, candidate in enumerate(candidates[:top_k], start=1):
             metadata = candidate.get("metadata") or {}

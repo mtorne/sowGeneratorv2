@@ -140,7 +140,13 @@ class SOWWorkflowService:
         if allow_partial:
             section_results = {k: v for k, v in section_results.items() if v}
             if not section_results:
-                raise ValidationError("RETRIEVE allow_partial=true but no sections returned candidates")
+                # Deterministic fallback: keep workflow progressing with explicit
+                # placeholder evidence so users can continue to ASSEMBLE/WRITE and
+                # see which sections still require real clause retrieval.
+                section_results = self._build_placeholder_retrieval_set(
+                    retrieval_specs=retrieval_specs,
+                    intake=sow_case.intake,
+                )
 
         artifact = self._append_artifact(
             sow_case,
@@ -156,6 +162,32 @@ class SOWWorkflowService:
         )
         sow_case.stage = WorkflowStage.RETRIEVED
         return artifact
+
+    @staticmethod
+    def _build_placeholder_retrieval_set(retrieval_specs: List[Dict[str, Any]], intake: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for spec in retrieval_specs:
+            section_name = spec.get("section", "UNKNOWN_SECTION")
+            filters = spec.get("filters", {})
+            result[section_name] = [
+                {
+                    "chunk_id": f"placeholder-{section_name.lower().replace(' ', '-').replace('/', '-')}",
+                    "source_uri": "placeholder://needs-input",
+                    "score": 0.01,
+                    "clause_text": (
+                        f"No knowledge-base clause returned for section '{section_name}'. "
+                        f"Please refine retrieval filters and rerun. "
+                        f"Current context industry={intake.get('industry')} region={intake.get('region')}."
+                    ),
+                    "metadata": {
+                        "section": section_name,
+                        "clause_type": filters.get("clause_type", "general"),
+                        "risk_level": filters.get("risk_level", "medium"),
+                    },
+                }
+            ]
+
+        return result
     def run_assemble(self, case_id: str) -> WorkflowArtifact:
         sow_case = self.get_case(case_id)
         self._ensure_stage(sow_case, [WorkflowStage.RETRIEVED, WorkflowStage.ASSEMBLED])
