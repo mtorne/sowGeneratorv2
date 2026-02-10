@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SoW Workflow Tester</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-2: #1f2937;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --danger: #ef4444;
+      --warn: #f59e0b;
+      --border: #334155;
+    }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 10px; }
+    .sub { color: var(--muted); margin-bottom: 20px; }
+    .card {
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .grid { display: grid; gap: 12px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
+    input, textarea, select {
+      width: 100%;
+      box-sizing: border-box;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 14px;
+    }
+    textarea { min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    button {
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.primary { background: #14532d; border-color: #166534; }
+    button:hover { filter: brightness(1.08); }
+    .status-pill {
+      display: inline-block;
+      font-size: 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      margin-left: 8px;
+      color: var(--muted);
+    }
+    .ok { color: #86efac; border-color: #166534; }
+    .err { color: #fca5a5; border-color: #7f1d1d; }
+    .timeline { display: flex; gap: 6px; flex-wrap: wrap; }
+    .step {
+      font-size: 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      color: var(--muted);
+    }
+    .active { color: #93c5fd; border-color: #1d4ed8; }
+    pre {
+      margin: 0;
+      background: #020617;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      overflow: auto;
+      max-height: 380px;
+      font-size: 12px;
+    }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    @media (max-width: 900px) {
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>SoW Workflow Tester</h1>
+    <div class="sub">Test the deterministic flow: <b>PLAN → RETRIEVE → ASSEMBLE → WRITE → REVIEW → APPROVE</b></div>
+
+    <div class="card grid grid-3">
+      <div>
+        <label>API Base URL</label>
+        <input id="baseUrl" placeholder="Auto-detected (recommended)" />
+        <div class="hint">If page is HTTPS, this auto-forces HTTPS to avoid mixed-content blocking.</div>
+      </div>
+      <div>
+        <label>Case ID</label>
+        <input id="caseId" placeholder="Created after /sow-cases" />
+      </div>
+      <div>
+        <label>Current Stage</label>
+        <input id="currentStage" value="INIT" readonly />
+      </div>
+      <div class="timeline" style="grid-column: 1 / -1">
+        <span class="step" data-stage="INIT">INIT</span>
+        <span class="step" data-stage="PLAN_READY">PLAN_READY</span>
+        <span class="step" data-stage="RETRIEVED">RETRIEVED</span>
+        <span class="step" data-stage="ASSEMBLED">ASSEMBLED</span>
+        <span class="step" data-stage="DRAFTED">DRAFTED</span>
+        <span class="step" data-stage="REVIEWED">REVIEWED</span>
+        <span class="step" data-stage="APPROVED">APPROVED</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>1) Create Case (INIT)</h3>
+      <div class="grid grid-2">
+        <div><label>Client Name</label><input id="clientName" value="Acme Corp" /></div>
+        <div><label>Project Scope</label><input id="projectScope" value="CRM modernization and support" /></div>
+        <div><label>Document Type</label><input id="documentType" value="SOW" /></div>
+        <div><label>Industry</label><input id="industry" value="Retail" /></div>
+        <div><label>Region</label><input id="region" value="US" /></div>
+        <div><label>Delivery Model</label><input id="deliveryModel" value="Fixed-fee" /></div>
+      </div>
+      <div class="btns"><button class="primary" onclick="createCase()">Create Case</button></div>
+    </div>
+
+    <div class="card">
+      <h3>2) Stage Payload Editor</h3>
+      <label>Payload JSON (used for PLAN / RETRIEVE / WRITE / REVIEW)</label>
+      <textarea id="payload"></textarea>
+      <div class="btns">
+        <button onclick="loadPlanTemplate()">Load PLAN template</button>
+        <button onclick="loadRetrieveTemplate()">Load RETRIEVE template</button>
+        <button onclick="loadWriteTemplate()">Load WRITE template</button>
+        <button onclick="loadReviewTemplate()">Load REVIEW template</button>
+      </div>
+      <p class="hint">ASSEMBLE and APPROVE do not need a payload body.</p>
+    </div>
+
+    <div class="card">
+      <h3>3) Execute Workflow</h3>
+      <div class="btns">
+        <button onclick="runStage('plan')">Run PLAN</button>
+        <button onclick="runStage('retrieve')">Run RETRIEVE</button>
+        <button onclick="runStage('assemble')">Run ASSEMBLE</button>
+        <button onclick="runStage('write')">Run WRITE</button>
+        <button onclick="runStage('review')">Run REVIEW</button>
+        <button onclick="runStage('approve')">Run APPROVE</button>
+        <button onclick="fetchCase()">Refresh Case</button>
+      </div>
+      <div class="btns">
+        <button onclick="fetchArtifact('PLAN_READY')">Get PLAN artifact</button>
+        <button onclick="fetchArtifact('RETRIEVED')">Get RETRIEVED artifact</button>
+        <button onclick="fetchArtifact('ASSEMBLED')">Get ASSEMBLED artifact</button>
+        <button onclick="fetchArtifact('DRAFTED')">Get DRAFTED artifact</button>
+        <button onclick="fetchArtifact('REVIEWED')">Get REVIEWED artifact</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Response <span id="statusPill" class="status-pill">idle</span></h3>
+      <pre id="output">{}</pre>
+    </div>
+  </div>
+
+  <script>
+    const outputEl = document.getElementById('output');
+    const statusEl = document.getElementById('statusPill');
+
+    function detectDefaultBaseUrl() {
+      const origin = window.location.origin;
+      if (window.location.protocol === 'https:') {
+        return `${origin}/api`;
+      }
+      return 'http://localhost:8001';
+    }
+
+    function normalizeBaseUrl(rawValue) {
+      let base = (rawValue || '').trim();
+      if (!base) {
+        base = detectDefaultBaseUrl();
+      }
+
+      if (window.location.protocol === 'https:' && base.startsWith('http://')) {
+        base = `https://${base.slice('http://'.length)}`;
+      }
+
+      return base.replace(/\/$/, '');
+    }
+
+    function apiBase() {
+      const input = document.getElementById('baseUrl');
+      const normalized = normalizeBaseUrl(input.value);
+      input.value = normalized;
+      localStorage.setItem('sowWorkflowBaseUrl', normalized);
+      return normalized;
+    }
+    function caseId() { return document.getElementById('caseId').value.trim(); }
+    function setStage(stage) {
+      document.getElementById('currentStage').value = stage || 'UNKNOWN';
+      document.querySelectorAll('.step').forEach(el => el.classList.toggle('active', el.dataset.stage === stage));
+    }
+    function pretty(obj) { return JSON.stringify(obj, null, 2); }
+    function setResult(ok, code, data) {
+      statusEl.textContent = `${ok ? 'ok' : 'error'} (${code})`;
+      statusEl.className = `status-pill ${ok ? 'ok' : 'err'}`;
+      outputEl.textContent = pretty(data);
+      if (data?.case?.stage) setStage(data.case.stage);
+      if (data?.artifact?.stage) setStage(data.artifact.stage);
+      if (data?.case?.case_id) document.getElementById('caseId').value = data.case.case_id;
+    }
+
+
+    function initializeBaseUrl() {
+      const input = document.getElementById('baseUrl');
+      const saved = localStorage.getItem('sowWorkflowBaseUrl');
+      input.value = normalizeBaseUrl(saved || input.value);
+    }
+
+    function getPayload() {
+      const raw = document.getElementById('payload').value.trim();
+      if (!raw) return { payload: {} };
+      return { payload: JSON.parse(raw) };
+    }
+
+    async function request(path, method = 'GET', body = null) {
+      const options = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) options.body = JSON.stringify(body);
+      const res = await fetch(`${apiBase()}${path}`, options);
+      let data;
+      try { data = await res.json(); } catch { data = { raw: await res.text() }; }
+      setResult(res.ok, res.status, data);
+      return { res, data };
+    }
+
+    async function createCase() {
+      const payload = {
+        client_name: document.getElementById('clientName').value,
+        project_scope: document.getElementById('projectScope').value,
+        document_type: document.getElementById('documentType').value,
+        industry: document.getElementById('industry').value,
+        region: document.getElementById('region').value,
+        delivery_model: document.getElementById('deliveryModel').value,
+      };
+      await request('/sow-cases', 'POST', payload);
+    }
+
+    async function runStage(stage) {
+      if (!caseId()) return alert('Create or enter a Case ID first');
+      if (['assemble', 'approve'].includes(stage)) {
+        await request(`/sow-cases/${caseId()}/${stage}`, 'POST');
+      } else {
+        await request(`/sow-cases/${caseId()}/${stage}`, 'POST', getPayload());
+      }
+    }
+
+    async function fetchCase() {
+      if (!caseId()) return alert('Enter a Case ID');
+      await request(`/sow-cases/${caseId()}`);
+    }
+
+    async function fetchArtifact(stage) {
+      if (!caseId()) return alert('Enter a Case ID');
+      await request(`/sow-cases/${caseId()}/artifacts/${stage}`);
+    }
+
+    function loadPlanTemplate() {
+      document.getElementById('payload').value = pretty({
+        industry: document.getElementById('industry').value || 'Retail',
+        region: document.getElementById('region').value || 'US',
+        sections: [
+          { name: 'Scope', intent: 'Define deliverables and boundaries', clause_type: 'scope', max_risk: 'medium' },
+          { name: 'Commercials', intent: 'Define pricing and payment terms', clause_type: 'commercial', max_risk: 'medium' }
+        ],
+        risk_checks: ['liability_cap_present', 'payment_terms_defined']
+      });
+    }
+
+    function loadRetrieveTemplate() {
+      document.getElementById('payload').value = pretty({
+        top_k: 3,
+        kb_results: {
+          Scope: [
+            { chunk_id: 'scope-1', score: 0.93, source_uri: 'oci://kb/scope-1', metadata: { section: 'Scope', clause_type: 'scope', risk_level: 'low' } },
+            { chunk_id: 'scope-2', score: 0.82, source_uri: 'oci://kb/scope-2', metadata: { section: 'Scope', clause_type: 'scope', risk_level: 'medium' } }
+          ],
+          Commercials: [
+            { chunk_id: 'commercial-1', score: 0.90, source_uri: 'oci://kb/commercial-1', metadata: { section: 'Commercials', clause_type: 'commercial', risk_level: 'low' } },
+            { chunk_id: 'commercial-2', score: 0.84, source_uri: 'oci://kb/commercial-2', metadata: { section: 'Commercials', clause_type: 'commercial', risk_level: 'medium' } }
+          ]
+        }
+      });
+    }
+
+    function loadWriteTemplate() {
+      document.getElementById('payload').value = pretty({
+        style: 'professional',
+        prohibited_commitments: ['guarantee', 'without exception']
+      });
+    }
+
+    function loadReviewTemplate() {
+      document.getElementById('payload').value = pretty({
+        forbidden_phrases: ['guarantee', 'without exception']
+      });
+    }
+
+    initializeBaseUrl();
+    loadPlanTemplate();
+    setStage('INIT');
+  </script>
+</body>
+</html>
