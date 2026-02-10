@@ -79,13 +79,20 @@ class KnowledgeAccessService:
     def _build_prompt(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any], top_k: int) -> str:
         return (
             "Retrieve SoW clauses from the knowledge base. "
-            "Return JSON only with key 'candidates' as an array of objects. "
-            "Each object must contain chunk_id, source_uri, score, and metadata {section, clause_type, risk_level}.\n"
+            "Return strict JSON only (no markdown, no prose) with top-level key 'candidates'. "
+            "Each candidate object MUST include: chunk_id, source_uri, score, clause_text, and metadata {section, clause_type, risk_level}.\n"
+            "Rules: "
+            "(1) metadata.section MUST exactly match the requested Section string. "
+            "(2) clause_text MUST be non-empty and contain the actual clause body (not a title). "
+            "(3) If no match exists, return {\"candidates\": []}. "
+            "(4) Do not invent source_uri values.\n"
             f"Section: {section_name}\n"
             f"TopK: {top_k}\n"
             f"Filters: {json.dumps(filters)}\n"
             f"Client Context: {json.dumps({'industry': intake.get('industry'), 'region': intake.get('region'), 'document_type': intake.get('document_type')})}\n"
-            "Do not include prose explanation."
+            "Output schema example: {\"candidates\":[{\"chunk_id\":\"...\",\"source_uri\":\"...\",\"score\":0.91,\"clause_text\":\"...\",\"metadata\":{\"section\":\""
+            + section_name
+            + "\",\"clause_type\":\"scope\",\"risk_level\":\"medium\"}}]}"
         )
 
     @staticmethod
