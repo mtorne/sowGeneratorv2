@@ -159,9 +159,10 @@ class SOWWorkflowService:
         sections = {}
         for section, config in blueprint.items():
             clause_ids = config["primary_clause_ids"]
+            clause_id_text = [str(clause_id) for clause_id in clause_ids]
             text = (
                 f"{section}: This section is drafted in {style} tone based on approved clause inputs "
-                f"{', '.join(clause_ids)}."
+                f"{', '.join(clause_id_text)}."
             )
             if any(word.lower() in text.lower() for word in prohibited):
                 raise ValidationError(f"WRITE produced prohibited commitment language in section '{section}'")
