@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SoW Workflow Tester</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-2: #1f2937;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --danger: #ef4444;
+      --warn: #f59e0b;
+      --border: #334155;
+    }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 10px; }
+    .sub { color: var(--muted); margin-bottom: 20px; }
+    .card {
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .grid { display: grid; gap: 12px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
+    input, textarea, select {
+      width: 100%;
+      box-sizing: border-box;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 14px;
+    }
+    textarea { min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    button {
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.primary { background: #14532d; border-color: #166534; }
+    button:hover { filter: brightness(1.08); }
+    .status-pill {
+      display: inline-block;
+      font-size: 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      margin-left: 8px;
+      color: var(--muted);
+    }
+    .ok { color: #86efac; border-color: #166534; }
+    .err { color: #fca5a5; border-color: #7f1d1d; }
+    .timeline { display: flex; gap: 6px; flex-wrap: wrap; }
+    .step {
+      font-size: 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      color: var(--muted);
+    }
+    .active { color: #93c5fd; border-color: #1d4ed8; }
+    pre {
+      margin: 0;
+      background: #020617;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      overflow: auto;
+      max-height: 380px;
+      font-size: 12px;
+    }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    @media (max-width: 900px) {
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>SoW Workflow Tester</h1>
+    <div class="sub">Test the deterministic flow: <b>PLAN → RETRIEVE → ASSEMBLE → WRITE → REVIEW → APPROVE</b></div>
+
+    <div class="card grid grid-3">
+      <div>
+        <label>API Base URL</label>
+        <input id="baseUrl" placeholder="Auto-detected (recommended)" />
+        <div class="hint">Use same-origin proxy URLs (`/api` or `/composer/api`) to avoid CORS/TLS issues with direct :8000 calls.</div>
+      </div>
+      <div>
+        <label>Case ID</label>
+        <input id="caseId" placeholder="Created after /sow-cases" />
+      </div>
+      <div>
+        <label>Current Stage</label>
+        <input id="currentStage" value="INIT" readonly />
+      </div>
+      <div class="timeline" style="grid-column: 1 / -1">
+        <span class="step" data-stage="INIT">INIT</span>
+        <span class="step" data-stage="PLAN_READY">PLAN_READY</span>
+        <span class="step" data-stage="RETRIEVED">RETRIEVED</span>
+        <span class="step" data-stage="ASSEMBLED">ASSEMBLED</span>
+        <span class="step" data-stage="DRAFTED">DRAFTED</span>
+        <span class="step" data-stage="REVIEWED">REVIEWED</span>
+        <span class="step" data-stage="APPROVED">APPROVED</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>1) Create Case (INIT)</h3>
+      <div class="grid grid-2">
+        <div><label>Client Name</label><input id="clientName" value="Acme Corp" /></div>
+        <div><label>Project Scope</label><input id="projectScope" value="CRM modernization and support" /></div>
+        <div><label>Document Type</label><input id="documentType" value="SOW" /></div>
+        <div><label>Industry</label><input id="industry" value="Retail" /></div>
+        <div><label>Region</label><input id="region" value="US" /></div>
+        <div><label>Delivery Model</label><input id="deliveryModel" value="Fixed-fee" /></div>
+      </div>
+      <div class="btns"><button class="primary" onclick="createCase()">Create Case</button></div>
+    </div>
+
+    <div class="card">
+      <h3>2) Stage Payload Editor</h3>
+      <label>Payload JSON (used for PLAN / RETRIEVE / WRITE / REVIEW)</label>
+      <textarea id="payload"></textarea>
+      <div class="btns">
+        <button onclick="loadPlanTemplate()">Load Complete SoW PLAN template</button>
+        <button onclick="loadRetrieveTemplate()">Load RETRIEVE template</button>
+        <button onclick="loadWriteTemplate()">Load WRITE template</button>
+        <button onclick="loadReviewTemplate()">Load REVIEW template</button>
+      </div>
+      <p class="hint">ASSEMBLE and APPROVE do not need a payload body.</p>
+    </div>
+
+    <div class="card">
+      <h3>3) Execute Workflow</h3>
+      <div class="btns">
+        <button onclick="runStage('plan')">Run PLAN</button>
+        <button onclick="runStage('retrieve')">Run RETRIEVE</button>
+        <button onclick="runStage('assemble')">Run ASSEMBLE</button>
+        <button onclick="runStage('write')">Run WRITE</button>
+        <button onclick="runStage('review')">Run REVIEW</button>
+        <button onclick="runStage('approve')">Run APPROVE</button>
+        <button onclick="fetchCase()">Refresh Case</button>
+      </div>
+      <div class="btns">
+        <button onclick="fetchArtifact('PLAN_READY')">Get PLAN artifact</button>
+        <button onclick="fetchArtifact('RETRIEVED')">Get RETRIEVED artifact</button>
+        <button onclick="fetchArtifact('ASSEMBLED')">Get ASSEMBLED artifact</button>
+        <button onclick="fetchArtifact('DRAFTED')">Get DRAFTED artifact</button>
+        <button onclick="fetchArtifact('REVIEWED')">Get REVIEWED artifact</button>
+      </div>
+      <div class="btns">
+        <button onclick="openDocumentMarkdown()">Open Document (Markdown)</button>
+        <button onclick="openDocumentHtml()">Open Document (HTML)</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Response <span id="statusPill" class="status-pill">idle</span></h3>
+      <pre id="output">{}</pre>
+    </div>
+  </div>
+
+  <script>
+    const outputEl = document.getElementById('output');
+    const statusEl = document.getElementById('statusPill');
+
+    function detectDefaultBaseUrl() {
+      const origin = window.location.origin;
+      const path = window.location.pathname || '/';
+
+      if (window.location.protocol === 'https:') {
+        // If UI is served under /composer/, prefer /composer/api first.
+        if (path.startsWith('/composer/')) {
+          return `${origin}/composer/api`;
+        }
+        return `${origin}/api`;
+      }
+
+      return 'http://localhost:8001';
+    }
+
+    function normalizeBaseUrl(rawValue) {
+      let base = (rawValue || '').trim();
+      if (!base) {
+        base = detectDefaultBaseUrl();
+      }
+
+      const origin = window.location.origin;
+      const path = window.location.pathname || '/';
+
+      if (window.location.protocol === 'https:') {
+        const composerProxy = `${origin}/composer/api`;
+        const defaultProxy = `${origin}/api`;
+        const shouldUseComposerProxy = path.startsWith('/composer/');
+
+        // Avoid direct backend port targets (e.g., :8000) and cross-origin URLs
+        // from browser code in HTTPS production deployments.
+        if (/:[0-9]{2,5}(\/|$)/.test(base) || !base.startsWith(origin)) {
+          base = shouldUseComposerProxy ? composerProxy : defaultProxy;
+        }
+      }
+
+      if (window.location.protocol === 'https:' && base.startsWith('http://')) {
+        base = `https://${base.slice('http://'.length)}`;
+      }
+
+      return base.replace(/\/$/, '');
+    }
+
+    function apiBase() {
+      const input = document.getElementById('baseUrl');
+      const normalized = normalizeBaseUrl(input.value);
+      input.value = normalized;
+      localStorage.setItem('sowWorkflowBaseUrl', normalized);
+      return normalized;
+    }
+    function caseId() { return document.getElementById('caseId').value.trim(); }
+    function setStage(stage) {
+      document.getElementById('currentStage').value = stage || 'UNKNOWN';
+      document.querySelectorAll('.step').forEach(el => el.classList.toggle('active', el.dataset.stage === stage));
+    }
+    function pretty(obj) { return JSON.stringify(obj, null, 2); }
+    function setResult(ok, code, data) {
+      statusEl.textContent = `${ok ? 'ok' : 'error'} (${code})`;
+      statusEl.className = `status-pill ${ok ? 'ok' : 'err'}`;
+      outputEl.textContent = pretty(data);
+      if (data?.case?.stage) setStage(data.case.stage);
+      if (data?.artifact?.stage) setStage(data.artifact.stage);
+      if (data?.case?.case_id) document.getElementById('caseId').value = data.case.case_id;
+    }
+
+
+    function initializeBaseUrl() {
+      const input = document.getElementById('baseUrl');
+      const saved = localStorage.getItem('sowWorkflowBaseUrl');
+      input.value = normalizeBaseUrl(saved || input.value);
+
+      // Migrate old stored values like https://<domain>:8000 to nginx proxy base.
+      if (window.location.protocol === 'https:' && /:8000(\/|$)/.test(input.value)) {
+        input.value = detectDefaultBaseUrl();
+        localStorage.setItem('sowWorkflowBaseUrl', input.value);
+      }
+    }
+
+    function getPayload() {
+      const raw = document.getElementById('payload').value.trim();
+      if (!raw) return { payload: {} };
+      return { payload: JSON.parse(raw) };
+    }
+
+    function fallbackBases(primaryBase) {
+      const origin = window.location.origin;
+      const list = [primaryBase];
+
+      if (window.location.protocol === 'https:') {
+        const candidates = [`${origin}/composer/api`, `${origin}/api`];
+        for (const item of candidates) {
+          if (!list.includes(item)) list.push(item);
+        }
+
+        // Never attempt direct backend ports from HTTPS browser sessions.
+        return list.filter((item) => {
+          try {
+            const url = new URL(item);
+            const isSameOrigin = url.origin === origin;
+            const proxyPath = url.pathname.startsWith('/api') || url.pathname.startsWith('/composer/api');
+            return isSameOrigin && proxyPath;
+          } catch {
+            return false;
+          }
+        });
+      }
+
+      return list;
+    }
+
+    async function request(path, method = 'GET', body = null) {
+      const options = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) options.body = JSON.stringify(body);
+
+      const bases = fallbackBases(apiBase());
+      let lastError = null;
+
+      for (const base of bases) {
+        try {
+          const res = await fetch(`${base}${path}`, options);
+          let data;
+          try { data = await res.json(); } catch { data = { raw: await res.text() }; }
+
+          if (!res.ok) {
+            setResult(false, res.status, {
+              ...data,
+              _request_base: base,
+              _tip: 'If this is a network/CORS failure, use /api or /composer/api behind nginx and avoid direct :8000 from browser.'
+            });
+            return { res, data };
+          }
+
+          if (base !== document.getElementById('baseUrl').value) {
+            document.getElementById('baseUrl').value = base;
+            localStorage.setItem('sowWorkflowBaseUrl', base);
+          }
+
+          setResult(true, res.status, { ...data, _request_base: base });
+          return { res, data };
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      setResult(false, 0, {
+        error: String(lastError || 'Network request failed'),
+        _tip: 'Browser could not reach API. Use same-origin nginx proxy URL (/api or /composer/api), not https://<domain>:8000.',
+        attempted_bases: bases,
+      });
+      return { res: null, data: null };
+    }
+
+    async function createCase() {
+      const payload = {
+        client_name: document.getElementById('clientName').value,
+        project_scope: document.getElementById('projectScope').value,
+        document_type: document.getElementById('documentType').value,
+        industry: document.getElementById('industry').value,
+        region: document.getElementById('region').value,
+        delivery_model: document.getElementById('deliveryModel').value,
+      };
+      await request('/sow-cases', 'POST', payload);
+    }
+
+    async function runStage(stage) {
+      if (!caseId()) return alert('Create or enter a Case ID first');
+      if (['assemble', 'approve'].includes(stage)) {
+        await request(`/sow-cases/${caseId()}/${stage}`, 'POST');
+      } else {
+        await request(`/sow-cases/${caseId()}/${stage}`, 'POST', getPayload());
+      }
+    }
+
+    async function fetchCase() {
+      if (!caseId()) return alert('Enter a Case ID');
+      await request(`/sow-cases/${caseId()}`);
+    }
+
+    async function fetchArtifact(stage) {
+      if (!caseId()) return alert('Enter a Case ID');
+      await request(`/sow-cases/${caseId()}/artifacts/${stage}`);
+    }
+
+    function openDocumentMarkdown() {
+      if (!caseId()) return alert('Enter a Case ID');
+      window.open(`${apiBase()}/sow-cases/${caseId()}/document.md`, '_blank', 'noopener');
+    }
+
+    function openDocumentHtml() {
+      if (!caseId()) return alert('Enter a Case ID');
+      window.open(`${apiBase()}/sow-cases/${caseId()}/document.html`, '_blank', 'noopener');
+    }
+
+    function loadPlanTemplate() {
+      document.getElementById('payload').value = pretty({
+        industry: document.getElementById('industry').value || 'Retail',
+        region: document.getElementById('region').value || 'US',
+        sections: [
+          { name: 'DISCLAIMER', intent: 'State legal disclaimers, usage boundaries, and interpretation notes for this SoW', clause_type: 'legal_notice', max_risk: 'high' },
+          { name: 'TABLE OF CONTENTS', intent: 'Provide a complete navigable index of sections and subsections', clause_type: 'structure', max_risk: 'low' },
+
+          { name: 'STATEMENT OF WORK VERSION HISTORY', intent: 'Track version number, change summary, author, and approval progression', clause_type: 'governance', max_risk: 'low' },
+          { name: 'STATUS AND NEXT STEPS', intent: 'Summarize current project status and immediate actions after this SoW version', clause_type: 'status', max_risk: 'low' },
+          { name: 'PROJECT PARTICIPANTS', intent: 'List customer and provider participants, roles, and contact responsibilities', clause_type: 'responsibility', max_risk: 'medium' },
+
+          { name: 'PROJECT FRAMEWORK', intent: 'Define delivery governance model, engagement framework, and operating principles', clause_type: 'framework', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Color Codes', intent: 'Define project status color coding conventions and interpretation rules', clause_type: 'framework', max_risk: 'low' },
+          { name: 'PROJECT FRAMEWORK / Ways of Working', intent: 'Define collaboration model, cadence, communication channels, and delivery mechanics', clause_type: 'framework', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Required Contribution From Cegid', intent: 'Define required customer-side staffing, access, and prerequisite contributions', clause_type: 'responsibility', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Expected Deliverables From Oracle Labs', intent: 'Define Oracle Labs deliverables, ownership, and expected output artifacts', clause_type: 'deliverables', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Cloud Environment Used For This Project', intent: 'Define cloud environment boundaries, tenancy context, and workload placement', clause_type: 'environment', max_risk: 'medium' },
+          { name: 'PROJECT FRAMEWORK / Optional Oracle Access Into The Cegid Owned Tenancy', intent: 'Define optional access model, controls, and approval conditions for tenancy access', clause_type: 'security_access', max_risk: 'high' },
+          { name: 'PROJECT FRAMEWORK / OCI Technical Getting Started Info', intent: 'Document onboarding prerequisites, technical setup steps, and initial operating guidance', clause_type: 'onboarding', max_risk: 'low' },
+
+          { name: 'CEGID COMPANY PROFILE', intent: 'Describe client company context, business model, and relevant organizational background', clause_type: 'client_profile', max_risk: 'low' },
+          { name: 'IN SCOPE APPLICATION: SOVEREIGN XRP', intent: 'Define in-scope application context, boundaries, and business criticality', clause_type: 'scope', max_risk: 'medium' },
+
+          { name: 'PROJECT OVERVIEW', intent: 'Provide end-to-end project summary, objectives, and execution framing', clause_type: 'overview', max_risk: 'medium' },
+          { name: 'PROJECT OVERVIEW / Scope', intent: 'Define detailed in-scope and out-of-scope work packages for this engagement', clause_type: 'scope', max_risk: 'medium' },
+          { name: 'PROJECT OVERVIEW / Major Project Milestones', intent: 'Define key milestones, target dates, and dependency checkpoints', clause_type: 'timeline', max_risk: 'medium' },
+          { name: 'PROJECT OVERVIEW / Responsibilities Matrix', intent: 'Define RACI mapping for all major streams and delivery accountabilities', clause_type: 'responsibility', max_risk: 'medium' },
+          { name: 'PROJECT OVERVIEW / Acceptance Criteria', intent: 'Define objective acceptance criteria, completion evidence, and sign-off conditions', clause_type: 'acceptance', max_risk: 'high' },
+          { name: 'PROJECT OVERVIEW / Major Technical Sessions Held', intent: 'Document major technical workshops, decisions, and session outcomes', clause_type: 'governance', max_risk: 'low' },
+
+          { name: 'CURRENT STATE ARCHITECTURE', intent: 'Describe existing baseline architecture and operating context before transformation', clause_type: 'architecture_current', max_risk: 'medium' },
+          { name: 'CURRENT STATE ARCHITECTURE / Current State Architecture - Diagram', intent: 'Provide current-state architecture diagram and reference structure', clause_type: 'architecture_current', max_risk: 'low' },
+          { name: 'CURRENT STATE ARCHITECTURE / Current State Architecture - Description', intent: 'Describe current-state components, integration flows, and operational characteristics', clause_type: 'architecture_current', max_risk: 'medium' },
+
+          { name: 'CURRENTLY USED TECHNOLOGY STACK', intent: 'List currently used platforms, products, runtimes, and integration technologies', clause_type: 'technology_stack', max_risk: 'low' },
+          { name: 'CURRENTLY USED TECHNOLOGY STACK / Current State Architecture -', intent: 'Map technology stack elements to current-state architecture positioning', clause_type: 'technology_stack', max_risk: 'low' },
+
+          { name: 'FUTURE STATE ARCHITECTURE', intent: 'Define target architecture state and modernization outcomes for approved scope', clause_type: 'architecture_target', max_risk: 'high' },
+          { name: 'FUTURE STATE ARCHITECTURE / Target Architecture Diagram', intent: 'Provide future-state target architecture diagram and component layout', clause_type: 'architecture_target', max_risk: 'medium' },
+          { name: 'FUTURE STATE ARCHITECTURE / Architecture Deployment Overview', intent: 'Describe deployment topology, environments, and release architecture approach', clause_type: 'deployment', max_risk: 'medium' },
+          { name: 'FUTURE STATE ARCHITECTURE / Architecture Components', intent: 'Define target architecture components, responsibilities, and interactions', clause_type: 'architecture_target', max_risk: 'medium' },
+          { name: 'FUTURE STATE ARCHITECTURE / Implementation Details and Configuration Settings', intent: 'Document implementation settings, configuration baselines, and technical controls', clause_type: 'implementation', max_risk: 'high' },
+          { name: 'FUTURE STATE ARCHITECTURE / OCI Service Sizing and Amounts', intent: 'Define OCI service sizing assumptions, capacity estimates, and quantity allocations', clause_type: 'capacity', max_risk: 'medium' },
+
+          { name: 'SOVEREIGN XRP OFFBOARDING', intent: 'Define offboarding scope, closure activities, and operational handover expectations', clause_type: 'offboarding', max_risk: 'medium' },
+          { name: 'SOVEREIGN XRP OFFBOARDING / Oracle Labs Team – Offboarding', intent: 'Define Oracle Labs offboarding tasks, deliverables, and knowledge transfer responsibilities', clause_type: 'offboarding', max_risk: 'medium' },
+          { name: 'SOVEREIGN XRP OFFBOARDING / Closing Feedback', intent: 'Capture final lessons learned, stakeholder feedback, and closure recommendations', clause_type: 'closure', max_risk: 'low' }
+        ],
+        risk_checks: [
+          'disclaimer_present',
+          'version_history_complete',
+          'scope_boundaries_defined',
+          'milestones_defined',
+          'responsibility_matrix_defined',
+          'acceptance_criteria_defined',
+          'security_access_controls_defined',
+          'implementation_configuration_defined',
+          'capacity_sizing_defined',
+          'offboarding_plan_defined'
+        ]
+      });
+    }
+
+    function loadRetrieveTemplate() {
+      document.getElementById('payload').value = pretty({
+        top_k: 2,
+        allow_partial: true,
+        section_names: [
+          'DISCLAIMER',
+          'PROJECT FRAMEWORK',
+          'PROJECT OVERVIEW',
+          'CURRENT STATE ARCHITECTURE',
+          'FUTURE STATE ARCHITECTURE'
+        ]
+      });
+    }
+
+    function loadWriteTemplate() {
+      document.getElementById('payload').value = pretty({
+        style: 'professional',
+        prohibited_commitments: ['guarantee', 'without exception']
+      });
+    }
+
+    function loadReviewTemplate() {
+      document.getElementById('payload').value = pretty({
+        forbidden_phrases: ['guarantee', 'without exception']
+      });
+    }
+
+    initializeBaseUrl();
+    loadPlanTemplate();
+    setStage('INIT');
+  </script>
+</body>
+</html>
