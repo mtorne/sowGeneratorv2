@@ -8,7 +8,7 @@ FRONTEND_LOG="/home/ubuntu/labs/sowGenTemplate/ai-doc-genv2/frontend.log"
 
 echo "Starting backend..."
 cd /home/ubuntu/labs/sowGenTemplate/ai-doc-genv2/backend || exit 1
-python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8001 > "$BACKEND_LOG" 2>&1 &
+python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 
 echo "Starting frontend..."
