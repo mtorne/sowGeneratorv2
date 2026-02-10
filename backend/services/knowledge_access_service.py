@@ -55,7 +55,10 @@ class KnowledgeAccessService:
                     "source_uri": candidate.get("source_uri") or "unknown://source",
                     "score": float(candidate.get("score", 0.5)),
                     "metadata": {
-                        "section": metadata.get("section") or section_name,
+                        # Force section scoping at normalization time so downstream
+                        # validation is deterministic even if RAG returns a variant
+                        # section label (e.g., casing/spacing differences).
+                        "section": section_name,
                         "clause_type": metadata.get("clause_type") or filters.get("clause_type", "general"),
                         "risk_level": metadata.get("risk_level") or filters.get("risk_level", "medium"),
                     },

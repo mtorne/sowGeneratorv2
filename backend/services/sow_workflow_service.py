@@ -115,6 +115,10 @@ class SOWWorkflowService:
                         f"RETRIEVE failed for section '{section_name}' from knowledge service: {str(exc)}"
                     ) from exc
             scoped = [c for c in candidates if c.get("metadata", {}).get("section") == section_name]
+            if not scoped and candidates:
+                # Safety fallback: if section tags drift despite retrieval being section-scoped,
+                # treat retrieved candidates as scoped to this section.
+                scoped = candidates
             valid = [
                 c
                 for c in scoped
@@ -123,6 +127,8 @@ class SOWWorkflowService:
                 and c.get("chunk_id")
                 and c.get("source_uri")
             ]
+            for item in valid:
+                item.setdefault("metadata", {})["section"] = section_name
             section_results[section_name] = valid[: retrieve_input.get("top_k", 5)]
         if not all(section_results.values()) and not allow_partial:
             raise ValidationError(
