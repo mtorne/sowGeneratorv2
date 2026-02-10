@@ -89,7 +89,15 @@ class SOWWorkflowService:
         self._ensure_stage(sow_case, [WorkflowStage.PLAN_READY, WorkflowStage.RETRIEVED])
         latest_plan = self.get_latest_artifact(case_id, WorkflowStage.PLAN_READY)
         retrieval_specs = latest_plan.payload["plan"]["retrieval_specs"]
+        section_names = retrieve_input.get("section_names") or []
+        if section_names:
+            selected = {str(name) for name in section_names}
+            retrieval_specs = [spec for spec in retrieval_specs if spec.get("section") in selected]
+            if not retrieval_specs:
+                raise ValidationError("RETRIEVE received section_names but none matched plan sections")
+
         kb_results = retrieve_input.get("kb_results", {})
+        allow_partial = bool(retrieve_input.get("allow_partial", False))
         section_results = {}
         for spec in retrieval_specs:
             section_name = spec["section"]
@@ -116,15 +124,29 @@ class SOWWorkflowService:
                 and c.get("source_uri")
             ]
             section_results[section_name] = valid[: retrieve_input.get("top_k", 5)]
-        if not all(section_results.values()):
+        if not all(section_results.values()) and not allow_partial:
             raise ValidationError(
                 "RETRIEVE produced insufficient section coverage. "
-                "Provide kb_results explicitly in payload for this run or verify OCI Agent endpoint returns citations/JSON candidates."
+                "Provide kb_results explicitly in payload for this run, limit section_names for batch retrieval, "
+                "or set allow_partial=true when iterating through large plans."
             )
+
+        if allow_partial:
+            section_results = {k: v for k, v in section_results.items() if v}
+            if not section_results:
+                raise ValidationError("RETRIEVE allow_partial=true but no sections returned candidates")
+
         artifact = self._append_artifact(
             sow_case,
             WorkflowStage.RETRIEVED,
-            {"retrieval_set": section_results},
+            {
+                "retrieval_set": section_results,
+                "meta": {
+                    "requested_sections": [spec.get("section") for spec in retrieval_specs],
+                    "allow_partial": allow_partial,
+                    "returned_sections": list(section_results.keys()),
+                },
+            },
         )
         sow_case.stage = WorkflowStage.RETRIEVED
         return artifact

@@ -445,17 +445,15 @@
 
     function loadRetrieveTemplate() {
       document.getElementById('payload').value = pretty({
-        top_k: 3,
-        kb_results: {
-          Scope: [
-            { chunk_id: 'scope-1', score: 0.93, source_uri: 'oci://kb/scope-1', metadata: { section: 'Scope', clause_type: 'scope', risk_level: 'low' } },
-            { chunk_id: 'scope-2', score: 0.82, source_uri: 'oci://kb/scope-2', metadata: { section: 'Scope', clause_type: 'scope', risk_level: 'medium' } }
-          ],
-          Commercials: [
-            { chunk_id: 'commercial-1', score: 0.90, source_uri: 'oci://kb/commercial-1', metadata: { section: 'Commercials', clause_type: 'commercial', risk_level: 'low' } },
-            { chunk_id: 'commercial-2', score: 0.84, source_uri: 'oci://kb/commercial-2', metadata: { section: 'Commercials', clause_type: 'commercial', risk_level: 'medium' } }
-          ]
-        }
+        top_k: 2,
+        allow_partial: true,
+        section_names: [
+          'DISCLAIMER',
+          'PROJECT FRAMEWORK',
+          'PROJECT OVERVIEW',
+          'CURRENT STATE ARCHITECTURE',
+          'FUTURE STATE ARCHITECTURE'
+        ]
       });
     }
 
