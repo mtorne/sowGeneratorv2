@@ -27,7 +27,8 @@ class KnowledgeAccessService:
         reuse_session: bool = False,
     ) -> List[Dict[str, Any]]:
         """Retrieve clauses for a section via OCI Agent Runtime and normalize output."""
-        prompt = self._build_prompt(section_name=section_name, filters=filters, intake=intake, top_k=top_k)
+        retrieval_query = self.build_retrieval_query(section_name=section_name, filters=filters, intake=intake)
+        prompt = self._build_prompt(retrieval_query=retrieval_query, top_k=top_k)
         session_id = self._session_id if reuse_session else None
         response = self.rag_service.chat(message=prompt, session_id=session_id)
         session_id = response.get("session_id") or session_id
@@ -38,12 +39,8 @@ class KnowledgeAccessService:
         # If strict prompt yields no usable candidates, run one relaxed retry
         # to recover references from less-structured responses.
         if not candidates and allow_relaxed_retry:
-            retry_prompt = self._build_relaxed_prompt(
-                section_name=section_name,
-                filters=filters,
-                intake=intake,
-                top_k=top_k,
-            )
+            relaxed_query = self.build_retrieval_query(section_name=section_name, filters=filters, intake=intake, relax_tags=True)
+            retry_prompt = self._build_relaxed_prompt(retrieval_query=relaxed_query, top_k=top_k)
             retry_response = self.rag_service.chat(message=retry_prompt, session_id=session_id)
             session_id = retry_response.get("session_id") or session_id
             if reuse_session:
@@ -107,7 +104,8 @@ class KnowledgeAccessService:
         reuse_session: bool = False,
     ) -> Dict[str, Any]:
         """Run strict (and optional relaxed) retrieval diagnostics for one section."""
-        prompt = self._build_prompt(section_name=section_name, filters=filters, intake=intake, top_k=top_k)
+        strict_query = self.build_retrieval_query(section_name=section_name, filters=filters, intake=intake)
+        prompt = self._build_prompt(retrieval_query=strict_query, top_k=top_k)
         session_id = self._session_id if reuse_session else None
         strict_response = self.rag_service.chat(message=prompt, session_id=session_id)
         session_id = strict_response.get("session_id") or session_id
@@ -124,12 +122,8 @@ class KnowledgeAccessService:
 
         relaxed_report = None
         if include_relaxed:
-            relaxed_prompt = self._build_relaxed_prompt(
-                section_name=section_name,
-                filters=filters,
-                intake=intake,
-                top_k=top_k,
-            )
+            relaxed_query = self.build_retrieval_query(section_name=section_name, filters=filters, intake=intake, relax_tags=True)
+            relaxed_prompt = self._build_relaxed_prompt(retrieval_query=relaxed_query, top_k=top_k)
             relaxed_response = self.rag_service.chat(message=relaxed_prompt, session_id=session_id)
             session_id = relaxed_response.get("session_id") or session_id
             if reuse_session:
@@ -197,8 +191,7 @@ class KnowledgeAccessService:
         return "likely_no_relevant_retrieval_or_prompt_mismatch"
 
     @staticmethod
-    def _build_prompt(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any], top_k: int) -> str:
-        retrieval_query = KnowledgeAccessService._build_retrieval_query(section_name, filters, intake)
+    def _build_prompt(retrieval_query: Dict[str, Any], top_k: int) -> str:
         return (
             "Retrieve SoW clauses from the knowledge base using only the structured retrieval query. "
             "Do NOT use any freeform intake text. "
@@ -215,8 +208,7 @@ class KnowledgeAccessService:
         )
 
     @staticmethod
-    def _build_relaxed_prompt(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any], top_k: int) -> str:
-        retrieval_query = KnowledgeAccessService._build_retrieval_query(section_name, filters, intake)
+    def _build_relaxed_prompt(retrieval_query: Dict[str, Any], top_k: int) -> str:
         return (
             "Retrieve SoW clauses from the knowledge base for the structured retrieval query. "
             "Use only filter metadata and do not use freeform intake text. "
@@ -229,22 +221,34 @@ class KnowledgeAccessService:
         )
 
 
-    @staticmethod
-    def _build_retrieval_query(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any]) -> Dict[str, Any]:
-        query = {"section": section_name}
-        query.update(filters or {})
+    def build_retrieval_query(
+        self,
+        section_name: str,
+        filters: Dict[str, Any],
+        intake: Dict[str, Any],
+        relax_tags: bool = False,
+    ) -> Dict[str, Any]:
+        query = {"section": section_name, **(filters or {})}
         query.setdefault("industry", intake.get("industry"))
         query.setdefault("region", intake.get("region"))
-        for key in [
-            "deployment_model",
-            "data_isolation",
-            "cloud_provider",
-            "ai_modes",
-            "data_flow",
-            "compliance_requirements",
-        ]:
-            query.setdefault(key, intake.get(key))
-        return {k: v for k, v in query.items() if v not in (None, "", [])}
+        query.setdefault("deployment_model", intake.get("deployment_model"))
+        query.setdefault("architecture_type", intake.get("architecture_pattern"))
+        query.setdefault("compliance", intake.get("regulatory_context") or intake.get("compliance"))
+        query.setdefault("cloud_provider", intake.get("cloud_provider"))
+        query.setdefault("data_isolation_model", intake.get("data_isolation_model"))
+
+        normalized: Dict[str, Any] = {}
+        for key in self.FILTER_DIMENSIONS:
+            value = query.get(key)
+            if relax_tags and key == "tags":
+                continue
+            if value in (None, "", []):
+                continue
+            normalized[key] = value
+
+        if "section" not in normalized:
+            normalized["section"] = section_name
+        return normalized
 
     @staticmethod
     def _extract_candidates(response: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -400,3 +404,18 @@ class KnowledgeAccessService:
             )
 
         return candidates
+    FILTER_DIMENSIONS = [
+        "section",
+        "clause_type",
+        "tags",
+        "risk_level",
+        "industry",
+        "region",
+        "deployment_model",
+        "architecture_type",
+        "compliance",
+        "architecture_pattern",
+        "service_family",
+        "cloud_provider",
+        "data_isolation_model",
+    ]

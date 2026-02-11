@@ -3,6 +3,37 @@ from typing import Dict
 class PromptTemplates:
     """Container for all prompt templates used in the application"""
     
+
+    CONTEXT_EXTRACTION_PROMPT = """
+Extract structured context used by deterministic SoW retrieval.
+Return strict JSON object with keys: deployment_model, architecture_pattern, data_isolation_model,
+cloud_provider, ai_services_used, data_flow_direction, regulatory_context.
+ai_services_used must be an array. Unknown values must be null or empty arrays.
+Intake JSON: {intake_json}
+"""
+
+    CLAUSE_ASSEMBLY_PROMPT = """
+WRITER MODE: CLAUSE_ASSEMBLY.
+Use ONLY retrieved clauses and do not invent obligations/services.
+Return strict JSON exactly matching section_schema.
+Section: {section_name}
+Intent: {section_intent}
+Section Schema: {section_schema}
+Structured Intake Context: {structured_context}
+Retrieved Clauses: {retrieved_clauses}
+"""
+
+    TECHNICAL_SYNTHESIS_PROMPT = """
+WRITER MODE: TECHNICAL_SYNTHESIS.
+Primary source is structured intake context; secondary source is retrieved clauses.
+Do not invent services not present in intake and do not contradict constraints.
+Return strict JSON exactly matching section_schema.
+Section: {section_name}
+Intent: {section_intent}
+Section Schema: {section_schema}
+Structured Intake Context: {structured_context}
+Retrieved Clauses: {retrieved_clauses}
+"""
     # Architecture diagram analysis prompt
 #    DIAGRAM_ANALYSIS = """
 #You are an OCI Cloud Architect. Describe the architecture in this diagram:
