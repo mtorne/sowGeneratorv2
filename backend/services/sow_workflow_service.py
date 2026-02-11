@@ -3,10 +3,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List
+import json
 import logging
+import re
 from uuid import uuid4
 
 from services.knowledge_access_service import KnowledgeAccessService
+from services.oci_client import OCIGenAIService
 
 logger = logging.getLogger(__name__)
 class WorkflowStage(str, Enum):
@@ -38,16 +41,32 @@ class ValidationError(WorkflowError):
     pass
 class SOWWorkflowService:
     """Deterministic orchestration service for PLAN->RETRIEVE->ASSEMBLE->WRITE->REVIEW."""
-    def __init__(self, knowledge_access_service: KnowledgeAccessService | None = None) -> None:
+    STRUCTURED_ATTRIBUTES = [
+        "deployment_model",
+        "data_isolation",
+        "cloud_provider",
+        "ai_modes",
+        "data_flow",
+        "compliance_requirements",
+    ]
+
+    def __init__(
+        self,
+        knowledge_access_service: KnowledgeAccessService | None = None,
+        llm_service: OCIGenAIService | None = None,
+    ) -> None:
         self._cases: Dict[str, SOWCase] = {}
         self.knowledge_access_service = knowledge_access_service or KnowledgeAccessService()
+        self.llm_service = llm_service or OCIGenAIService()
     @staticmethod
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
     def create_case(self, intake: Dict[str, Any]) -> SOWCase:
         self._validate_intake(intake)
+        intake_with_context = dict(intake)
+        intake_with_context["structured_context"] = self._extract_structured_context(intake)
         case_id = str(uuid4())
-        sow_case = SOWCase(case_id=case_id, created_at=self._now_iso(), intake=intake)
+        sow_case = SOWCase(case_id=case_id, created_at=self._now_iso(), intake=intake_with_context)
         self._cases[case_id] = sow_case
         return sow_case
     def get_case(self, case_id: str) -> SOWCase:
@@ -63,24 +82,28 @@ class SOWWorkflowService:
         for section in sections:
             if not section.get("name") or not section.get("intent"):
                 raise ValidationError("Each plan section requires name and intent")
+        structured_context = sow_case.intake.get("structured_context") or self._extract_structured_context(sow_case.intake)
         retrieval_specs = []
+        normalized_sections = []
         for section in sections:
+            clause_filters = self.build_clause_filters(
+                section_name=section["name"],
+                clause_filters=section.get("clause_filters", {}),
+                intake=sow_case.intake,
+                structured_context=structured_context,
+            )
+            normalized_sections.append({**section, "clause_filters": clause_filters})
             retrieval_specs.append(
                 {
                     "section": section["name"],
-                    "filters": {
-                        "section": section["name"],
-                        "clause_type": section.get("clause_type", "general"),
-                        "risk_level": section.get("max_risk", "medium"),
-                        "industry": plan_input.get("industry", "general"),
-                        "region": plan_input.get("region", "global"),
-                    },
+                    "clause_filters": clause_filters,
                 }
             )
         artifact_payload = {
             "plan": {
-                "sections": sections,
+                "sections": normalized_sections,
                 "retrieval_specs": retrieval_specs,
+                "structured_context": structured_context,
                 "risk_checks": plan_input.get("risk_checks", []),
             }
         }
@@ -116,8 +139,8 @@ class SOWWorkflowService:
                 try:
                     candidates = self.knowledge_access_service.retrieve_section_clauses(
                         section_name=section_name,
-                        filters=spec.get("filters", {}),
-                        intake=sow_case.intake,
+                        filters=spec.get("clause_filters", {}),
+                        intake=self._retrieval_context(sow_case.intake),
                         top_k=top_k,
                         allow_relaxed_retry=not allow_partial,
                     )
@@ -133,9 +156,7 @@ class SOWWorkflowService:
             valid = [
                 c
                 for c in scoped
-                if c.get("metadata", {}).get("clause_type")
-                and c.get("metadata", {}).get("risk_level")
-                and c.get("chunk_id")
+                if c.get("chunk_id")
                 and c.get("source_uri")
             ]
             for item in valid:
@@ -156,7 +177,7 @@ class SOWWorkflowService:
                 # see which sections still require real clause retrieval.
                 section_results = self._build_placeholder_retrieval_set(
                     retrieval_specs=retrieval_specs,
-                    intake=sow_case.intake,
+                    intake=self._retrieval_context(sow_case.intake),
                 )
 
         artifact = self._append_artifact(
@@ -179,7 +200,7 @@ class SOWWorkflowService:
         result: Dict[str, List[Dict[str, Any]]] = {}
         for spec in retrieval_specs:
             section_name = spec.get("section", "UNKNOWN_SECTION")
-            filters = spec.get("filters", {})
+            filters = spec.get("clause_filters", {})
             result[section_name] = [
                 {
                     "chunk_id": f"placeholder-{section_name.lower().replace(' ', '-').replace('/', '-')}",
@@ -192,8 +213,8 @@ class SOWWorkflowService:
                     ),
                     "metadata": {
                         "section": section_name,
-                        "clause_type": filters.get("clause_type", "general"),
-                        "risk_level": filters.get("risk_level", "medium"),
+                        "risk_level": filters.get("risk_level", ["medium"]),
+                        "tags": filters.get("tags", []),
                     },
                 }
             ]
@@ -205,6 +226,7 @@ class SOWWorkflowService:
         retrieval = self.get_latest_artifact(case_id, WorkflowStage.RETRIEVED).payload["retrieval_set"]
         plan_sections = self.get_latest_artifact(case_id, WorkflowStage.PLAN_READY).payload["plan"]["sections"]
         intent_by_section = {item.get("name"): item.get("intent", "") for item in plan_sections}
+        schema_by_section = {item.get("name"): item.get("output_schema", {}) for item in plan_sections}
         blueprint = {}
         for section, clauses in retrieval.items():
             ordered = sorted(clauses, key=lambda c: c.get("score", 0), reverse=True)
@@ -216,6 +238,7 @@ class SOWWorkflowService:
                 "primary_clause_ids": primary,
                 "primary_clauses": ordered[:2],
                 "alternatives": alternatives,
+                "output_schema": schema_by_section.get(section, {}),
                 "conflicts": [],
             }
         artifact = self._append_artifact(
@@ -229,12 +252,14 @@ class SOWWorkflowService:
         sow_case = self.get_case(case_id)
         self._ensure_stage(sow_case, [WorkflowStage.ASSEMBLED, WorkflowStage.DRAFTED])
         blueprint = self.get_latest_artifact(case_id, WorkflowStage.ASSEMBLED).payload["assembly_blueprint"]
+        plan = self.get_latest_artifact(case_id, WorkflowStage.PLAN_READY).payload["plan"]
         style = write_input.get("style", "professional")
         prohibited = write_input.get("prohibited_commitments", [])
-        sections = {}
-        for section, config in blueprint.items():
-            clause_ids = config["primary_clause_ids"]
-            clause_id_text = [str(clause_id) for clause_id in clause_ids]
+        structured_sections = []
+        section_order = [item.get("name") for item in plan.get("sections", [])]
+        for section in section_order:
+            config = blueprint.get(section, {})
+            clause_ids = config.get("primary_clause_ids", [])
             section_intent = config.get("section_intent") or "Define terms and obligations for this section"
             evidence_lines = []
             for clause in config.get("primary_clauses", []):
@@ -244,41 +269,50 @@ class SOWWorkflowService:
 
             evidence_lines = evidence_lines[:2]
 
-            if evidence_lines:
-                body = "\n\n".join(evidence_lines)
-            else:
-                body = (
-                    "No clause body text was returned by retrieval for this section. "
-                    "Please rerun RETRIEVE with tighter filters or provide kb_results manually before approval."
-                )
-
-            text = (
-                f"{section}\n\n"
-                f"Intent ({style} tone): {section_intent}.\n\n"
-                f"{body}\n\n"
-                f"Source clause IDs: {', '.join(clause_id_text)}."
+            section_schema = config.get("output_schema") or {
+                "core_architecture": "",
+                "security_controls": [],
+                "data_flow_description": "",
+                "limitations": [],
+            }
+            structured_output = self._write_structured_section(
+                section_name=section,
+                section_intent=section_intent,
+                style=style,
+                section_schema=section_schema,
+                retrieved_clauses=config.get("primary_clauses", []),
+                intake=sow_case.intake,
             )
+            text = self._structured_section_to_markdown(section, structured_output)
             if any(word.lower() in text.lower() for word in prohibited):
                 raise ValidationError(f"WRITE produced prohibited commitment language in section '{section}'")
-            sections[section] = {
-                "draft_text": text,
-                "source_mapping": [{"paragraph": 1, "clause_ids": clause_ids}],
-            }
+            structured_sections.append(
+                {
+                    "name": section,
+                    "intent": section_intent,
+                    "structured_content": structured_output,
+                    "draft_markdown": text,
+                    "source_mapping": [{"paragraph": 1, "clause_ids": clause_ids}],
+                }
+            )
+
+        markdown = self._build_document_markdown(sow_case, structured_sections)
         artifact = self._append_artifact(
             sow_case,
             WorkflowStage.DRAFTED,
-            {"draft": {"sections": sections}},
+            {"draft": {"structured_sections": structured_sections, "markdown": markdown}},
         )
         sow_case.stage = WorkflowStage.DRAFTED
         return artifact
     def run_review(self, case_id: str, review_input: Dict[str, Any]) -> WorkflowArtifact:
         sow_case = self.get_case(case_id)
         self._ensure_stage(sow_case, [WorkflowStage.DRAFTED, WorkflowStage.REVIEWED])
-        draft = self.get_latest_artifact(case_id, WorkflowStage.DRAFTED).payload["draft"]["sections"]
+        draft = self.get_latest_artifact(case_id, WorkflowStage.DRAFTED).payload["draft"]["structured_sections"]
         findings = []
         forbidden_phrases = review_input.get("forbidden_phrases", ["guarantee", "without exception"])
-        for section_name, section_data in draft.items():
-            text = section_data["draft_text"].lower()
+        for section_data in draft:
+            section_name = section_data["name"]
+            text = section_data["draft_markdown"].lower()
             for phrase in forbidden_phrases:
                 if phrase.lower() in text:
                     findings.append(
@@ -320,24 +354,8 @@ class SOWWorkflowService:
         sow_case = self.get_case(case_id)
         if sow_case.stage not in [WorkflowStage.DRAFTED, WorkflowStage.REVIEWED, WorkflowStage.APPROVED]:
             raise ValidationError("Document is available only after WRITE stage")
-        draft_sections = self.get_latest_artifact(case_id, WorkflowStage.DRAFTED).payload["draft"]["sections"]
-        lines = [
-            f"# Statement of Work - {sow_case.intake.get('client_name', 'Client')}",
-            "",
-            f"- **Project Scope:** {sow_case.intake.get('project_scope', 'N/A')}",
-            f"- **Industry:** {sow_case.intake.get('industry', 'N/A')}",
-            f"- **Region:** {sow_case.intake.get('region', 'N/A')}",
-            f"- **Current Stage:** {sow_case.stage.value}",
-            "",
-            "---",
-            "",
-        ]
-        for section_name, section_data in draft_sections.items():
-            lines.append(f"## {section_name}")
-            lines.append("")
-            lines.append(section_data.get("draft_text", ""))
-            lines.append("")
-        return "\n".join(lines)
+        draft = self.get_latest_artifact(case_id, WorkflowStage.DRAFTED).payload["draft"]
+        return draft.get("markdown", "")
     def render_document_html(self, case_id: str) -> str:
         markdown = self.render_document_markdown(case_id)
         # Simple deterministic markdown-to-html conversion for headings/paragraphs.
@@ -391,3 +409,150 @@ class SOWWorkflowService:
         missing = [field for field in required if not intake.get(field)]
         if missing:
             raise ValidationError(f"Missing intake fields: {', '.join(missing)}")
+
+    def _extract_structured_context(self, intake: Dict[str, Any]) -> Dict[str, Any]:
+        prompt = (
+            "Extract structured delivery attributes from intake data for SoW retrieval. "
+            "Return strict JSON with keys deployment_model, data_isolation, cloud_provider, ai_modes, data_flow, compliance_requirements. "
+            "ai_modes and compliance_requirements must be arrays. Use null or empty arrays when unknown. "
+            f"Intake JSON: {json.dumps(intake)}"
+        )
+        try:
+            response = self.llm_service.generate_text_content(prompt=prompt, provider="generic")
+            parsed = self._parse_json_object(response)
+        except Exception as exc:
+            logger.warning("Structured context extraction failed, using fallback defaults: %s", exc)
+            parsed = {}
+        normalized = {
+            "deployment_model": parsed.get("deployment_model"),
+            "data_isolation": parsed.get("data_isolation"),
+            "cloud_provider": parsed.get("cloud_provider"),
+            "ai_modes": parsed.get("ai_modes") or [],
+            "data_flow": parsed.get("data_flow"),
+            "compliance_requirements": parsed.get("compliance_requirements") or [],
+        }
+        return normalized
+
+    @staticmethod
+    def _parse_json_object(raw: str) -> Dict[str, Any]:
+        if not raw:
+            return {}
+        raw = raw.strip()
+        for candidate in [raw, *re.findall(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL)]:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+        return {}
+
+    def _retrieval_context(self, intake: Dict[str, Any]) -> Dict[str, Any]:
+        context = {
+            "industry": intake.get("industry"),
+            "region": intake.get("region"),
+            "document_type": intake.get("document_type"),
+        }
+        context.update(intake.get("structured_context") or {})
+        return context
+
+    def build_clause_filters(
+        self,
+        section_name: str,
+        clause_filters: Dict[str, Any],
+        intake: Dict[str, Any],
+        structured_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        resolved = {"section": section_name, **(clause_filters or {})}
+        for key, value in list(resolved.items()):
+            if isinstance(value, str):
+                resolved[key] = self._resolve_template_value(value, intake, structured_context)
+        for key in ["industry", "region", *self.STRUCTURED_ATTRIBUTES]:
+            if key not in resolved or resolved[key] in (None, ""):
+                if key in structured_context:
+                    resolved[key] = structured_context.get(key)
+                else:
+                    resolved[key] = intake.get(key)
+        return resolved
+
+    @staticmethod
+    def _resolve_template_value(value: str, intake: Dict[str, Any], structured_context: Dict[str, Any]) -> Any:
+        template_match = re.fullmatch(r"\{\{\s*intake\.([a-zA-Z0-9_]+)\s*\}\}", value)
+        if template_match:
+            key = template_match.group(1)
+            return intake.get(key)
+        context_match = re.fullmatch(r"\{\{\s*structured\.([a-zA-Z0-9_]+)\s*\}\}", value)
+        if context_match:
+            key = context_match.group(1)
+            return structured_context.get(key)
+        return value
+
+    def _write_structured_section(
+        self,
+        section_name: str,
+        section_intent: str,
+        style: str,
+        section_schema: Dict[str, Any],
+        retrieved_clauses: List[Dict[str, Any]],
+        intake: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        prompt = (
+            "You are writing one Statement of Work section.\n"
+            "You must use only the provided clauses as building blocks.\n"
+            "Do not invent new obligations or services.\n"
+            "Do not use sources outside the provided retrieval results.\n"
+            "Do not contradict intake constraints.\n"
+            "Rephrase for coherence while preserving meaning.\n"
+            "Return STRICT JSON only matching the provided section_schema keys.\n"
+            f"Section Name: {section_name}\n"
+            f"Section Intent: {section_intent}\n"
+            f"Style: {style}\n"
+            f"Intake Constraints: {json.dumps(self._retrieval_context(intake))}\n"
+            f"Section Schema: {json.dumps(section_schema)}\n"
+            f"Retrieved Clauses: {json.dumps(retrieved_clauses)}"
+        )
+        parsed = {}
+        try:
+            response = self.llm_service.generate_text_content(prompt=prompt, provider="generic")
+            parsed = self._parse_json_object(response)
+        except Exception as exc:
+            logger.warning("Writer LLM failed for section=%s: %s", section_name, exc)
+        if not parsed:
+            parsed = {k: section_schema.get(k) for k in section_schema.keys()}
+            parsed["limitations"] = parsed.get("limitations") or [
+                "Unable to draft from clauses; rerun WRITE with richer retrieval evidence."
+            ]
+        return {key: parsed.get(key, default) for key, default in section_schema.items()}
+
+    @staticmethod
+    def _structured_section_to_markdown(section_name: str, content: Dict[str, Any]) -> str:
+        lines = [f"### {section_name}"]
+        for key, value in content.items():
+            label = key.replace("_", " ").title()
+            if isinstance(value, list):
+                lines.append(f"**{label}:**")
+                for item in value:
+                    lines.append(f"- {item}")
+            else:
+                lines.append(f"**{label}:** {value}")
+            lines.append("")
+        return "\n".join(lines).strip()
+
+    def _build_document_markdown(self, sow_case: SOWCase, structured_sections: List[Dict[str, Any]]) -> str:
+        lines = [
+            f"# Statement of Work - {sow_case.intake.get('client_name', 'Client')}",
+            "",
+            f"- **Project Scope:** {sow_case.intake.get('project_scope', 'N/A')}",
+            f"- **Industry:** {sow_case.intake.get('industry', 'N/A')}",
+            f"- **Region:** {sow_case.intake.get('region', 'N/A')}",
+            f"- **Current Stage:** {sow_case.stage.value}",
+            "",
+            "---",
+            "",
+        ]
+        for section in structured_sections:
+            lines.append(f"## {section['name']}")
+            lines.append("")
+            lines.append(section.get("draft_markdown", ""))
+            lines.append("")
+        return "\n".join(lines)
