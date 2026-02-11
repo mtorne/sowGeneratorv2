@@ -188,7 +188,7 @@ class KnowledgeAccessService:
                 {
                     "chunk_id": candidate.get("chunk_id") or f"{section_name.lower()}-kb-{idx}",
                     "source_uri": candidate.get("source_uri") or "unknown://source",
-                    "score": float(candidate.get("score", 0.5)),
+                    "score": self._safe_score(candidate.get("score")),
                     "clause_text": (
                         candidate.get("clause_text")
                         or candidate.get("text")
@@ -209,6 +209,16 @@ class KnowledgeAccessService:
 
         logger.info("Knowledge retrieval returned %s candidates for section %s", len(normalized), section_name)
         return normalized
+
+
+    @staticmethod
+    def _safe_score(raw_score: Any, default: float = 0.5) -> float:
+        if raw_score in (None, ""):
+            return default
+        try:
+            return float(raw_score)
+        except (TypeError, ValueError):
+            return default
 
 
     def preview_section_quality(
