@@ -24,13 +24,18 @@ class KnowledgeAccessService:
         intake: Dict[str, Any],
         top_k: int = 5,
         allow_relaxed_retry: bool = True,
-        reuse_session: bool = False,
+        reuse_session: bool = True,
     ) -> List[Dict[str, Any]]:
         """Retrieve clauses for a section via OCI Agent Runtime and normalize output."""
         retrieval_query = self.build_retrieval_query(section_name=section_name, filters=filters, intake=intake)
         prompt = self._build_prompt(retrieval_query=retrieval_query, top_k=top_k)
         session_id = self._session_id if reuse_session else None
-        response = self.rag_service.chat(message=prompt, session_id=session_id)
+        try:
+            response = self.rag_service.chat(message=prompt, session_id=session_id)
+        except Exception as exc:
+            logger.error("RAG retrieval failed for section=%s: %s", section_name, exc)
+            return []
+
         session_id = response.get("session_id") or session_id
         if reuse_session:
             self._session_id = session_id
@@ -41,12 +46,15 @@ class KnowledgeAccessService:
         if not candidates and allow_relaxed_retry:
             relaxed_query = self.build_retrieval_query(section_name=section_name, filters=filters, intake=intake, relax_tags=True)
             retry_prompt = self._build_relaxed_prompt(retrieval_query=relaxed_query, top_k=top_k)
-            retry_response = self.rag_service.chat(message=retry_prompt, session_id=session_id)
-            session_id = retry_response.get("session_id") or session_id
-            if reuse_session:
-                self._session_id = session_id
-            candidates = self._extract_candidates(retry_response)
-            response = retry_response
+            try:
+                retry_response = self.rag_service.chat(message=retry_prompt, session_id=session_id)
+                session_id = retry_response.get("session_id") or session_id
+                if reuse_session:
+                    self._session_id = session_id
+                candidates = self._extract_candidates(retry_response)
+                response = retry_response
+            except Exception as exc:
+                logger.warning("Relaxed RAG retry failed for section=%s: %s", section_name, exc)
 
         logger.info(
             "RAG retrieval diagnostics | section=%s | session=%s | answer_chars=%s | citations=%s | raw_candidates=%s",
@@ -101,13 +109,17 @@ class KnowledgeAccessService:
         intake: Dict[str, Any],
         top_k: int = 5,
         include_relaxed: bool = True,
-        reuse_session: bool = False,
+        reuse_session: bool = True,
     ) -> Dict[str, Any]:
         """Run strict (and optional relaxed) retrieval diagnostics for one section."""
         strict_query = self.build_retrieval_query(section_name=section_name, filters=filters, intake=intake)
         prompt = self._build_prompt(retrieval_query=strict_query, top_k=top_k)
         session_id = self._session_id if reuse_session else None
-        strict_response = self.rag_service.chat(message=prompt, session_id=session_id)
+        try:
+            strict_response = self.rag_service.chat(message=prompt, session_id=session_id)
+        except Exception as exc:
+            logger.error("RAG quality strict retrieval failed for section=%s: %s", section_name, exc)
+            strict_response = {"answer": "", "citations": [], "session_id": session_id}
         session_id = strict_response.get("session_id") or session_id
         if reuse_session:
             self._session_id = session_id
@@ -124,7 +136,11 @@ class KnowledgeAccessService:
         if include_relaxed:
             relaxed_query = self.build_retrieval_query(section_name=section_name, filters=filters, intake=intake, relax_tags=True)
             relaxed_prompt = self._build_relaxed_prompt(retrieval_query=relaxed_query, top_k=top_k)
-            relaxed_response = self.rag_service.chat(message=relaxed_prompt, session_id=session_id)
+            try:
+                relaxed_response = self.rag_service.chat(message=relaxed_prompt, session_id=session_id)
+            except Exception as exc:
+                logger.warning("RAG quality relaxed retrieval failed for section=%s: %s", section_name, exc)
+                relaxed_response = {"answer": "", "citations": [], "session_id": session_id}
             session_id = relaxed_response.get("session_id") or session_id
             if reuse_session:
                 self._session_id = session_id
