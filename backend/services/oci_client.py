@@ -1,9 +1,17 @@
 from oci import config, retry
 from oci.generative_ai_inference import GenerativeAiInferenceClient
 from oci.generative_ai_inference.models import (
-    ImageUrl, ImageContent, TextContent, Message,
-    ChatDetails, GenericChatRequest, BaseChatRequest,
-    OnDemandServingMode, CohereChatRequest
+    BaseChatRequest,
+    ChatDetails,
+    CohereChatRequest,
+    GenericChatRequest,
+    ImageContent,
+    ImageUrl,
+    JsonSchemaResponseFormat,
+    Message,
+    OnDemandServingMode,
+    ResponseJsonSchema,
+    TextContent,
 )
 from typing import Any, Dict, List, Optional
 import logging
@@ -11,24 +19,55 @@ from config.settings import oci_config
 
 logger = logging.getLogger(__name__)
 
+
 class OCIGenAIService:
     """
     Service class for interacting with OCI Generative AI Service.
     Supports Llama 3 (Text & Vision) and Cohere Command R+.
     """
-    
+
     def __init__(self):
         self.config = config.from_file()
         self.client = GenerativeAiInferenceClient(
             config=self.config,
             service_endpoint=oci_config.endpoint,
             retry_strategy=retry.NoneRetryStrategy(),
-            timeout=(oci_config.timeout_connect, oci_config.timeout_read)
+            timeout=(oci_config.timeout_connect, oci_config.timeout_read),
         )
-        # Default models (should be in your settings.py, but defaults here for safety)
-        self.model_llama_text = getattr(oci_config, 'model_id_llama', "meta.llama-3.1-70b-instruct")
-        self.model_llama_vision = getattr(oci_config, 'model_id_vision', "meta.llama-3.2-90b-vision-instruct")
-        self.model_cohere = getattr(oci_config, 'model_id_cohere', "cohere.command-r-plus")
+        self.model_llama_text = getattr(oci_config, "model_id_llama", "meta.llama-3.1-70b-instruct")
+        self.model_llama_vision = getattr(oci_config, "model_id_vision", "meta.llama-3.2-90b-vision-instruct")
+        self.model_cohere = getattr(oci_config, "model_id_cohere", "cohere.command-r-plus")
+
+    def _build_response_format(self, response_format: Optional[Dict[str, Any]]) -> Optional[JsonSchemaResponseFormat]:
+        """Build OCI SDK response_format object from dict payload.
+
+        Expected input shape:
+        {
+          "type": "JSON_SCHEMA",
+          "json_schema": {
+            "name": "...",
+            "strict": true,
+            "schema": {...}
+          }
+        }
+        """
+        if not response_format:
+            return None
+        if str(response_format.get("type", "")).upper() != "JSON_SCHEMA":
+            return None
+
+        schema_cfg = response_format.get("json_schema") or {}
+        try:
+            json_schema = ResponseJsonSchema(
+                name=schema_cfg.get("name") or "structured_output",
+                description=schema_cfg.get("description"),
+                schema=schema_cfg.get("schema") or {},
+                is_strict=bool(schema_cfg.get("strict", False)),
+            )
+            return JsonSchemaResponseFormat(type=JsonSchemaResponseFormat.TYPE_JSON_SCHEMA, json_schema=json_schema)
+        except Exception as exc:
+            logger.warning("Failed to build JSON_SCHEMA response format object, continuing without it: %s", exc)
+            return None
 
     def _build_generic_request(
         self,
@@ -37,70 +76,56 @@ class OCIGenAIService:
         top_k_override=None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> GenericChatRequest:
-        """Builds a Generic request (for Llama models)"""
-
-         # Determine Top K
+        """Build a Generic request (for Llama/Grok/Gemini wrappers)."""
         if top_k_override is not None:
-             k_val = top_k_override
+            k_val = top_k_override
         else:
-             # Default from config (likely -1 for Llama)
-             k_val = int(getattr(oci_config, 'top_k', -1))
+            k_val = int(getattr(oci_config, "top_k", -1))
 
         request = GenericChatRequest(
             messages=messages,
             max_tokens=max_tokens,
             temperature=oci_config.temperature,
             top_p=oci_config.top_p,
-            top_k=k_val    ,
-            api_format=BaseChatRequest.API_FORMAT_GENERIC
+            top_k=k_val,
+            api_format=BaseChatRequest.API_FORMAT_GENERIC,
         )
 
-        # OCI structured output (JSON schema) support when SDK exposes response_format
-        if response_format and hasattr(request, "response_format"):
-            try:
-                request.response_format = response_format
-            except Exception as exc:
-                logger.warning("Unable to set response_format on OCI request: %s", exc)
+        schema_response = self._build_response_format(response_format)
+        if schema_response:
+            request.response_format = schema_response
 
         return request
 
     def _resolve_max_tokens(self, model_id: str) -> int:
-        """Pick a safe output token budget for the selected model."""
         model = (model_id or "").lower()
-
-        # Gemini models usually need a higher generation budget for long SoW sections.
         if "gemini" in model:
             return int(getattr(oci_config, "gemini_max_output_tokens", 4096))
-
-        # Keep existing behavior for other generic models unless configured otherwise.
         return int(getattr(oci_config, "max_output_tokens", 2000))
-    
+
     def _build_cohere_request(self, prompt: str, max_tokens=2000) -> CohereChatRequest:
-        """Builds a request specifically for Cohere models"""
         return CohereChatRequest(
             message=prompt,
             max_tokens=max_tokens,
             temperature=oci_config.temperature,
             frequency_penalty=0.0,
             top_p=oci_config.top_p,
-            top_k=int(oci_config.top_k), # Ensure int
-            api_format=BaseChatRequest.API_FORMAT_COHERE
+            top_k=int(oci_config.top_k),
+            api_format=BaseChatRequest.API_FORMAT_COHERE,
         )
-    
+
     def _call_model(self, model_id: str, chat_request: BaseChatRequest) -> str:
-        """Helper to execute the OCI API call"""
+        """Helper to execute the OCI API call."""
         try:
             chat_detail = ChatDetails(
                 compartment_id=oci_config.compartment_id,
                 serving_mode=OnDemandServingMode(model_id=model_id),
-                chat_request=chat_request
+                chat_request=chat_request,
             )
             response = self.client.chat(chat_detail)
-            
-            # Check response structure (Llama vs Cohere can differ slightly in wrapper)
-            if hasattr(response.data, 'chat_response'):
-                # Generic model response (Llama)
-                if hasattr(response.data.chat_response, 'choices'):
+
+            if hasattr(response.data, "chat_response"):
+                if hasattr(response.data.chat_response, "choices"):
                     first_choice = response.data.chat_response.choices[0]
                     finish_reason = getattr(first_choice, "finish_reason", None)
                     if finish_reason:
@@ -110,51 +135,41 @@ class OCIGenAIService:
                     text_parts = [part.text for part in content_parts if hasattr(part, "text") and part.text]
                     if text_parts:
                         text_response = "\n".join(text_parts)
-
-                        # Most providers use a LENGTH/MAX_TOKENS-style reason when output was cut.
                         if str(finish_reason).lower() in {"length", "max_tokens", "token_limit"}:
-                            logger.warning(
-                                f"Response may be truncated for model {model_id}: finish_reason={finish_reason}"
-                            )
-
+                            logger.warning(f"Response may be truncated for model {model_id}: finish_reason={finish_reason}")
                         return text_response
                     return str(content_parts)
-                # Cohere model response
-                elif hasattr(response.data.chat_response, 'text'):
+                if hasattr(response.data.chat_response, "text"):
                     return response.data.chat_response.text
-            
+
             return str(response.data)
 
         except Exception as e:
             logger.error(f"OCI GenAI Call Error (Model: {model_id}): {str(e)}")
             raise e
 
+    def _is_request_format_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "please pass in correct format of request" in text or "status': 400" in text or '"status": 400' in text
+
     def analyze_diagram(self, image_data_uri: str, prompt: str, model_id: str = None) -> str:
-        """
-        Analyze a diagram using Llama 3.2 Vision (Multimodal)
-        """
         target_model = model_id if model_id else self.model_llama_vision
         logger.info(f"Analyzing diagram... Model: {target_model}")
         image_content = ImageContent(image_url=ImageUrl(url=image_data_uri))
         text_content = TextContent(text=prompt)
         message = Message(role="USER", content=[image_content, text_content])
 
-         # Determine safe top_k
-        safe_top_k = -1 # Default for Llama
-        if "gemini" in target_model.lower():
-             safe_top_k = 40 # Standard for Gemini
-        elif "grok" in target_model.lower():
-             safe_top_k = 40 # Safe bet for Grok/OpenAI-like
-        
+        safe_top_k = -1
+        if "gemini" in target_model.lower() or "grok" in target_model.lower():
+            safe_top_k = 40
+
         request = self._build_generic_request(
             [message],
             max_tokens=self._resolve_max_tokens(target_model),
-            top_k_override=safe_top_k
+            top_k_override=safe_top_k,
         )
         return self._call_model(target_model, request)
-        #return self._call_model(self.model_llama_vision, request)
 
-    
     def generate_text_content(
         self,
         prompt: str,
@@ -162,49 +177,42 @@ class OCIGenAIService:
         model_id: str = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """
-        Generate text content using the specified provider model.
-        
-        Args:
-            prompt: Text prompt
-            provider: 'llama', 'cohere', or 'generic'
-            model_id: Specific model OCID/Name
-        """
-        # 1. Determine the Target Model
+        """Generate text content using selected provider/model."""
         target_model = model_id
         if not target_model:
             target_model = self.model_cohere if "cohere" in provider.lower() else self.model_llama_text
-            
+
         logger.info(f"Generating text... Provider: {provider.upper()} | Model: {target_model}")
-        
-        # 2. Handle Cohere (Special Request Format)
+
         if "cohere" in provider.lower() or "cohere" in target_model.lower():
             request = self._build_cohere_request(prompt)
             return self._call_model(target_model, request)
-            
-        # 3. Handle Generic (Llama, Gemini, Grok, OpenAI)
-        else: 
-            # --- CRITICAL FIX: Adjust Top_K based on Model Type ---
-            # Llama loves -1. Gemini/Grok hate it and need a positive integer (e.g. 40).
-            current_top_k = -1  # Default for Llama
-            
-            if "gemini" in target_model.lower():
-                current_top_k = 40  # Valid for Gemini
-            elif "grok" in target_model.lower():
-                current_top_k = 40  # Valid for Grok
-            elif "openai" in target_model.lower():
-                 current_top_k = 1  # Often safer for OpenAI OSS wrappers
-                 
-            # Create Message
-            message = Message(role="USER", content=[TextContent(text=prompt)])
-            
-            # Build Request with Override
-            request = self._build_generic_request(
-                [message], 
-                max_tokens=self._resolve_max_tokens(target_model),
-                top_k_override=current_top_k,
-                response_format=response_format,
-            )
-            
-            # --- CRITICAL FIX: Use target_model, NOT self.model_llama_text ---
+
+        current_top_k = -1
+        if "gemini" in target_model.lower() or "grok" in target_model.lower():
+            current_top_k = 40
+        elif "openai" in target_model.lower():
+            current_top_k = 1
+
+        message = Message(role="USER", content=[TextContent(text=prompt)])
+        request = self._build_generic_request(
+            [message],
+            max_tokens=self._resolve_max_tokens(target_model),
+            top_k_override=current_top_k,
+            response_format=response_format,
+        )
+
+        try:
             return self._call_model(target_model, request)
+        except Exception as exc:
+            # Fallback for models/endpoints that reject responseFormat payloads.
+            if response_format and self._is_request_format_error(exc):
+                logger.warning("Retrying OCI chat without response_format due to 400 request format validation.")
+                fallback_request = self._build_generic_request(
+                    [message],
+                    max_tokens=self._resolve_max_tokens(target_model),
+                    top_k_override=current_top_k,
+                    response_format=None,
+                )
+                return self._call_model(target_model, fallback_request)
+            raise
