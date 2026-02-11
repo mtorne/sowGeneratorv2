@@ -5,7 +5,7 @@ from oci.generative_ai_inference.models import (
     ChatDetails, GenericChatRequest, BaseChatRequest,
     OnDemandServingMode, CohereChatRequest
 )
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 from config.settings import oci_config
 
@@ -30,7 +30,13 @@ class OCIGenAIService:
         self.model_llama_vision = getattr(oci_config, 'model_id_vision', "meta.llama-3.2-90b-vision-instruct")
         self.model_cohere = getattr(oci_config, 'model_id_cohere', "cohere.command-r-plus")
 
-    def _build_generic_request(self, messages: List[Message], max_tokens=2000,top_k_override=None) -> GenericChatRequest:
+    def _build_generic_request(
+        self,
+        messages: List[Message],
+        max_tokens=2000,
+        top_k_override=None,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> GenericChatRequest:
         """Builds a Generic request (for Llama models)"""
 
          # Determine Top K
@@ -40,7 +46,7 @@ class OCIGenAIService:
              # Default from config (likely -1 for Llama)
              k_val = int(getattr(oci_config, 'top_k', -1))
 
-        return GenericChatRequest(
+        request = GenericChatRequest(
             messages=messages,
             max_tokens=max_tokens,
             temperature=oci_config.temperature,
@@ -48,6 +54,15 @@ class OCIGenAIService:
             top_k=k_val    ,
             api_format=BaseChatRequest.API_FORMAT_GENERIC
         )
+
+        # OCI structured output (JSON schema) support when SDK exposes response_format
+        if response_format and hasattr(request, "response_format"):
+            try:
+                request.response_format = response_format
+            except Exception as exc:
+                logger.warning("Unable to set response_format on OCI request: %s", exc)
+
+        return request
 
     def _resolve_max_tokens(self, model_id: str) -> int:
         """Pick a safe output token budget for the selected model."""
@@ -140,7 +155,13 @@ class OCIGenAIService:
         #return self._call_model(self.model_llama_vision, request)
 
     
-    def generate_text_content(self, prompt: str, provider: str = "llama", model_id: str = None) -> str:
+    def generate_text_content(
+        self,
+        prompt: str,
+        provider: str = "llama",
+        model_id: str = None,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """
         Generate text content using the specified provider model.
         
@@ -181,7 +202,8 @@ class OCIGenAIService:
             request = self._build_generic_request(
                 [message], 
                 max_tokens=self._resolve_max_tokens(target_model),
-                top_k_override=current_top_k
+                top_k_override=current_top_k,
+                response_format=response_format,
             )
             
             # --- CRITICAL FIX: Use target_model, NOT self.model_llama_text ---
