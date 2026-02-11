@@ -103,6 +103,106 @@ class KnowledgeAccessService:
         logger.info("Knowledge retrieval returned %s candidates for section %s", len(normalized), section_name)
         return normalized
 
+
+    def preview_section_quality(
+        self,
+        section_name: str,
+        filters: Dict[str, Any],
+        intake: Dict[str, Any],
+        top_k: int = 5,
+        include_relaxed: bool = True,
+        reuse_session: bool = False,
+    ) -> Dict[str, Any]:
+        """Run strict (and optional relaxed) retrieval diagnostics for one section."""
+        prompt = self._build_prompt(section_name=section_name, filters=filters, intake=intake, top_k=top_k)
+        session_id = self._session_id if reuse_session else None
+        strict_response = self.rag_service.chat(message=prompt, session_id=session_id)
+        session_id = strict_response.get("session_id") or session_id
+        if reuse_session:
+            self._session_id = session_id
+
+        strict_candidates = self._extract_candidates(strict_response)
+        strict_report = self._build_quality_report(
+            mode="strict",
+            response=strict_response,
+            candidates=strict_candidates,
+            section_name=section_name,
+        )
+
+        relaxed_report = None
+        if include_relaxed:
+            relaxed_prompt = self._build_relaxed_prompt(
+                section_name=section_name,
+                filters=filters,
+                intake=intake,
+                top_k=top_k,
+            )
+            relaxed_response = self.rag_service.chat(message=relaxed_prompt, session_id=session_id)
+            session_id = relaxed_response.get("session_id") or session_id
+            if reuse_session:
+                self._session_id = session_id
+            relaxed_candidates = self._extract_candidates(relaxed_response)
+            relaxed_report = self._build_quality_report(
+                mode="relaxed",
+                response=relaxed_response,
+                candidates=relaxed_candidates,
+                section_name=section_name,
+            )
+
+        return {
+            "section": section_name,
+            "session_id": session_id,
+            "strict": strict_report,
+            "relaxed": relaxed_report,
+            "quality_summary": self._summarize_quality(strict_report, relaxed_report),
+        }
+
+    @staticmethod
+    def _build_quality_report(
+        mode: str,
+        response: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        section_name: str,
+    ) -> Dict[str, Any]:
+        citations = (response or {}).get("citations", []) or []
+        answer = (response or {}).get("answer", "")
+        return {
+            "mode": mode,
+            "answer_preview": answer[:240],
+            "answer_chars": len(answer),
+            "citations_count": len(citations),
+            "candidate_count": len(candidates),
+            "has_json_candidates": KnowledgeAccessService._parse_candidates_from_answer(answer) is not None,
+            "candidate_sample": [
+                {
+                    "chunk_id": item.get("chunk_id"),
+                    "source_uri": item.get("source_uri"),
+                    "score": item.get("score"),
+                    "clause_text_preview": str(item.get("clause_text", ""))[:160],
+                    "metadata": {
+                        "section": (item.get("metadata") or {}).get("section", section_name),
+                        "clause_type": (item.get("metadata") or {}).get("clause_type"),
+                        "risk_level": (item.get("metadata") or {}).get("risk_level"),
+                    },
+                }
+                for item in candidates[:3]
+            ],
+        }
+
+    @staticmethod
+    def _summarize_quality(strict_report: Dict[str, Any], relaxed_report: Optional[Dict[str, Any]]) -> str:
+        strict_count = strict_report.get("candidate_count", 0)
+        relaxed_count = (relaxed_report or {}).get("candidate_count", 0)
+        strict_citations = strict_report.get("citations_count", 0)
+
+        if strict_count > 0:
+            return "strict_has_candidates"
+        if relaxed_count > 0:
+            return "strict_empty_relaxed_has_candidates"
+        if strict_citations > 0:
+            return "citations_present_but_no_candidates"
+        return "likely_no_relevant_retrieval_or_prompt_mismatch"
+
     @staticmethod
     def _build_prompt(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any], top_k: int) -> str:
         return (

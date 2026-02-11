@@ -67,6 +67,14 @@ class SOWCaseCreateRequest(BaseModel):
 class StagePayloadRequest(BaseModel):
     payload: Dict[str, Any] = {}
 
+
+class RAGQualityPreviewRequest(BaseModel):
+    intake: Dict[str, Any]
+    sections: list[Dict[str, Any]]
+    top_k: int = 5
+    include_relaxed: bool = True
+
+
 # Initialize services
 content_generator = ContentGeneratorService()
 document_service = DocumentService()
@@ -245,6 +253,55 @@ async def run_retrieve(case_id: str, request: StagePayloadRequest):
     except StateTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
+
+
+
+@app.post("/rag-quality/preview")
+async def rag_quality_preview(request: RAGQualityPreviewRequest):
+    try:
+        sections = request.sections or []
+        if not sections:
+            raise WorkflowValidationError("sections must be non-empty")
+
+        reports = []
+        for section in sections:
+            section_name = section.get("name")
+            if not section_name:
+                raise WorkflowValidationError("each section requires a name")
+
+            filters = {
+                "section": section_name,
+                "clause_type": section.get("clause_type", "general"),
+                "risk_level": section.get("max_risk", "medium"),
+                "industry": request.intake.get("industry", "general"),
+                "region": request.intake.get("region", "global"),
+            }
+
+            reports.append(
+                sow_workflow_service.knowledge_access_service.preview_section_quality(
+                    section_name=section_name,
+                    filters=filters,
+                    intake=request.intake,
+                    top_k=request.top_k,
+                    include_relaxed=request.include_relaxed,
+                )
+            )
+
+        quality_rollup = {
+            "total_sections": len(reports),
+            "strict_with_candidates": sum(1 for item in reports if item["strict"]["candidate_count"] > 0),
+            "relaxed_with_candidates": sum(1 for item in reports if (item.get("relaxed") or {}).get("candidate_count", 0) > 0),
+            "no_candidates": sum(
+                1
+                for item in reports
+                if item["strict"]["candidate_count"] == 0
+                and (item.get("relaxed") or {}).get("candidate_count", 0) == 0
+            ),
+        }
+
+        return JSONResponse(content={"status": "success", "quality": quality_rollup, "reports": reports})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 @app.post("/sow-cases/{case_id}/assemble")
 async def run_assemble(case_id: str):
