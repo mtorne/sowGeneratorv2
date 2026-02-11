@@ -3,9 +3,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List
+import logging
 from uuid import uuid4
 
 from services.knowledge_access_service import KnowledgeAccessService
+
+logger = logging.getLogger(__name__)
 class WorkflowStage(str, Enum):
     INIT = "INIT"
     PLAN_READY = "PLAN_READY"
@@ -98,7 +101,14 @@ class SOWWorkflowService:
 
         kb_results = retrieve_input.get("kb_results", {})
         allow_partial = bool(retrieve_input.get("allow_partial", False))
+        top_k = max(1, int(retrieve_input.get("top_k", 5)))
         section_results = {}
+
+        if allow_partial:
+            logger.info(
+                "RETRIEVE allow_partial enabled for case=%s. Running strict single-pass retrieval per section to avoid gateway timeouts.",
+                case_id,
+            )
         for spec in retrieval_specs:
             section_name = spec["section"]
             candidates = kb_results.get(section_name)
@@ -108,7 +118,8 @@ class SOWWorkflowService:
                         section_name=section_name,
                         filters=spec.get("filters", {}),
                         intake=sow_case.intake,
-                        top_k=retrieve_input.get("top_k", 5),
+                        top_k=top_k,
+                        allow_relaxed_retry=not allow_partial,
                     )
                 except Exception as exc:
                     raise ValidationError(
@@ -129,7 +140,7 @@ class SOWWorkflowService:
             ]
             for item in valid:
                 item.setdefault("metadata", {})["section"] = section_name
-            section_results[section_name] = valid[: retrieve_input.get("top_k", 5)]
+            section_results[section_name] = valid[:top_k]
         if not all(section_results.values()) and not allow_partial:
             raise ValidationError(
                 "RETRIEVE produced insufficient section coverage. "

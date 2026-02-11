@@ -23,6 +23,7 @@ class KnowledgeAccessService:
         filters: Dict[str, Any],
         intake: Dict[str, Any],
         top_k: int = 5,
+        allow_relaxed_retry: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Retrieve clauses for a section via OCI Agent Runtime and normalize output.
@@ -39,7 +40,7 @@ class KnowledgeAccessService:
 
         # If strict prompt yields no usable candidates, run one relaxed retry
         # to recover references from less-structured responses.
-        if not candidates:
+        if not candidates and allow_relaxed_retry:
             retry_prompt = self._build_relaxed_prompt(
                 section_name=section_name,
                 filters=filters,
