@@ -24,6 +24,7 @@ class KnowledgeAccessService:
         intake: Dict[str, Any],
         top_k: int = 5,
         allow_relaxed_retry: bool = True,
+        reuse_session: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Retrieve clauses for a section via OCI Agent Runtime and normalize output.
@@ -34,8 +35,11 @@ class KnowledgeAccessService:
           - metadata: {section, clause_type, risk_level}
         """
         prompt = self._build_prompt(section_name=section_name, filters=filters, intake=intake, top_k=top_k)
-        response = self.rag_service.chat(message=prompt, session_id=self._session_id)
-        self._session_id = response.get("session_id") or self._session_id
+        session_id = self._session_id if reuse_session else None
+        response = self.rag_service.chat(message=prompt, session_id=session_id)
+        session_id = response.get("session_id") or session_id
+        if reuse_session:
+            self._session_id = session_id
         candidates = self._extract_candidates(response)
 
         # If strict prompt yields no usable candidates, run one relaxed retry
@@ -47,15 +51,17 @@ class KnowledgeAccessService:
                 intake=intake,
                 top_k=top_k,
             )
-            retry_response = self.rag_service.chat(message=retry_prompt, session_id=self._session_id)
-            self._session_id = retry_response.get("session_id") or self._session_id
+            retry_response = self.rag_service.chat(message=retry_prompt, session_id=session_id)
+            session_id = retry_response.get("session_id") or session_id
+            if reuse_session:
+                self._session_id = session_id
             candidates = self._extract_candidates(retry_response)
             response = retry_response
 
         logger.info(
             "RAG retrieval diagnostics | section=%s | session=%s | answer_chars=%s | citations=%s | raw_candidates=%s",
             section_name,
-            self._session_id,
+            session_id,
             len((response or {}).get("answer", "")),
             len((response or {}).get("citations", []) or []),
             len(candidates),
@@ -104,7 +110,7 @@ class KnowledgeAccessService:
             "Return strict JSON only (no markdown, no prose) with top-level key 'candidates'. "
             "Each candidate object MUST include: chunk_id, source_uri, score, clause_text, and metadata {section, clause_type, risk_level}.\n"
             "Rules: "
-            "(1) metadata.section MUST exactly match the requested Section string. "
+            "(1) Prefer clauses tagged for the requested section, but if exact metadata labels differ, still return semantically relevant clauses and set metadata.section to the requested Section string. "
             "(2) clause_text MUST be non-empty and contain the actual clause body (not a title). "
             "(3) If no match exists, return {\"candidates\": []}. "
             "(4) Do not invent source_uri values.\n"
@@ -127,6 +133,7 @@ class KnowledgeAccessService:
             f"TopK: {top_k}\n"
             f"Filters: {json.dumps(filters)}\n"
             f"Client Context: {json.dumps({'industry': intake.get('industry'), 'region': intake.get('region'), 'document_type': intake.get('document_type')})}\n"
+            "Do not answer with uncertainty text; always emit candidates array (possibly empty). "
             "Output JSON with key candidates."
         )
 
@@ -136,25 +143,16 @@ class KnowledgeAccessService:
         if not answer_text:
             return KnowledgeAccessService._candidates_from_citations(response)
 
-        # Try fenced JSON first.
-        fenced = re.search(r"```json\s*(\{.*?\})\s*```", answer_text, re.DOTALL)
-        raw_json = fenced.group(1) if fenced else answer_text.strip()
+        parsed_candidates = KnowledgeAccessService._parse_candidates_from_answer(answer_text)
+        if parsed_candidates is not None:
+            if parsed_candidates:
+                return parsed_candidates
+            citation_candidates = KnowledgeAccessService._candidates_from_citations(response)
+            if citation_candidates:
+                return citation_candidates
+            return KnowledgeAccessService._candidates_from_answer_uris(answer_text)
 
-        try:
-            parsed = json.loads(raw_json)
-            if isinstance(parsed, dict):
-                parsed_candidates = parsed.get("candidates", []) or []
-                if parsed_candidates:
-                    return parsed_candidates
-                # If strict JSON response has empty list, still try citations/URIs.
-                citation_candidates = KnowledgeAccessService._candidates_from_citations(response)
-                if citation_candidates:
-                    return citation_candidates
-                return KnowledgeAccessService._candidates_from_answer_uris(answer_text)
-            if isinstance(parsed, list):
-                return parsed
-        except Exception:
-            logger.warning("Could not parse retrieval response as JSON")
+        logger.warning("Could not parse retrieval response as JSON. Answer preview=%s", answer_text[:160])
 
         # Fall back to citation-derived candidates when the answer is not strict JSON.
         citation_candidates = KnowledgeAccessService._candidates_from_citations(response)
@@ -166,6 +164,52 @@ class KnowledgeAccessService:
         if uri_candidates:
             logger.info("Using %s URI-derived candidates from answer text", len(uri_candidates))
         return uri_candidates
+
+    @staticmethod
+    def _parse_candidates_from_answer(answer_text: str) -> Optional[List[Dict[str, Any]]]:
+        # 1) Try direct parse.
+        parsed = KnowledgeAccessService._safe_json_loads(answer_text.strip())
+        extracted = KnowledgeAccessService._extract_candidates_from_parsed(parsed)
+        if extracted is not None:
+            return extracted
+
+        # 2) Try fenced JSON blocks.
+        for block in re.findall(r"```(?:json)?\s*(.*?)\s*```", answer_text, re.DOTALL):
+            parsed = KnowledgeAccessService._safe_json_loads(block.strip())
+            extracted = KnowledgeAccessService._extract_candidates_from_parsed(parsed)
+            if extracted is not None:
+                return extracted
+
+        # 3) Try grabbing inline object/list snippets that include candidates.
+        for snippet in re.findall(r"(\{[\s\S]*?\}|\[[\s\S]*?\])", answer_text):
+            if "candidates" not in snippet and not snippet.strip().startswith("["):
+                continue
+            parsed = KnowledgeAccessService._safe_json_loads(snippet.strip())
+            extracted = KnowledgeAccessService._extract_candidates_from_parsed(parsed)
+            if extracted is not None:
+                return extracted
+
+        return None
+
+    @staticmethod
+    def _safe_json_loads(raw: str) -> Any:
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_candidates_from_parsed(parsed: Any) -> Optional[List[Dict[str, Any]]]:
+        if isinstance(parsed, dict):
+            if "candidates" in parsed:
+                return parsed.get("candidates", []) or []
+            return None
+
+        if isinstance(parsed, list):
+            dict_entries = [item for item in parsed if isinstance(item, dict)]
+            if dict_entries:
+                return dict_entries
+        return None
 
     @staticmethod
     def _candidates_from_citations(response: Dict[str, Any]) -> List[Dict[str, Any]]:
