@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Dict, Optional
+import json
 
 from oci import config, retry
 from oci.generative_ai_agent_runtime import GenerativeAiAgentRuntimeClient
@@ -80,6 +81,28 @@ class OCIRAGService:
         return {
             "answer": content or "",
             "session_id": session_from_headers or session_id,
-            "citations": [getattr(c, "source", str(c)) for c in citations],
+            "citations": [self._serialize_citation(c) for c in citations],
             "guardrail_result": getattr(data, "guardrail_result", None),
         }
+
+    @staticmethod
+    def _serialize_citation(citation: Any) -> Dict[str, Any]:
+        source = getattr(citation, "source", citation)
+        if isinstance(source, dict):
+            return source
+
+        if hasattr(source, "to_dict"):
+            try:
+                return source.to_dict()
+            except Exception:
+                pass
+
+        source_text = str(source)
+        try:
+            parsed = json.loads(source_text)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+        return {"source_uri": source_text}

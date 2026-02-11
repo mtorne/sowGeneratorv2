@@ -173,13 +173,16 @@ class KnowledgeAccessService:
         candidates: List[Dict[str, Any]] = []
 
         for idx, citation in enumerate(citations, start=1):
-            source_uri = str(citation)
+            source_uri = KnowledgeAccessService._citation_source_uri(citation)
+            clause_text = KnowledgeAccessService._citation_clause_text(citation)
+            if not source_uri and not clause_text:
+                continue
             candidates.append(
                 {
                     "chunk_id": f"citation-{idx}",
-                    "source_uri": source_uri,
+                    "source_uri": source_uri or f"citation://{idx}",
                     "score": 0.5,
-                    "clause_text": f"Evidence reference from citation source {source_uri}.",
+                    "clause_text": clause_text,
                     "metadata": {},
                 }
             )
@@ -188,6 +191,42 @@ class KnowledgeAccessService:
             logger.info("Using %s citation-derived candidates due to non-JSON RAG answer", len(candidates))
 
         return candidates
+
+    @staticmethod
+    def _citation_source_uri(citation: Any) -> str:
+        if isinstance(citation, dict):
+            source_location = citation.get("source_location") or {}
+            return (
+                str(source_location.get("url") or "")
+                or str(citation.get("source_uri") or "")
+                or str(citation.get("doc_id") or "")
+                or ""
+            )
+        return str(citation or "")
+
+    @staticmethod
+    def _citation_clause_text(citation: Any) -> str:
+        if isinstance(citation, dict):
+            source_text = str(citation.get("source_text") or "").strip()
+            if source_text:
+                return KnowledgeAccessService._strip_front_matter(source_text)
+            title = str(citation.get("title") or "").strip()
+            if title:
+                return title
+
+        text = str(citation or "").strip()
+        if not text:
+            return ""
+        return f"Evidence reference from citation source {text}."
+
+    @staticmethod
+    def _strip_front_matter(text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("---"):
+            parts = stripped.split("---", 2)
+            if len(parts) == 3:
+                stripped = parts[2].strip()
+        return re.sub(r"\s+", " ", stripped).strip()
 
     @staticmethod
     def _candidates_from_answer_uris(answer_text: str) -> List[Dict[str, Any]]:

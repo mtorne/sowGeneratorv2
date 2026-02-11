@@ -245,17 +245,18 @@ class SOWWorkflowService:
             evidence_lines = evidence_lines[:2]
 
             if evidence_lines:
-                body = " ".join(evidence_lines)
+                body = "\n\n".join(evidence_lines)
             else:
                 body = (
-                    "The available clause evidence is limited to references, so this section should be refined "
-                    "after validating the source clause text from the knowledge base."
+                    "No clause body text was returned by retrieval for this section. "
+                    "Please rerun RETRIEVE with tighter filters or provide kb_results manually before approval."
                 )
 
             text = (
-                f"{section}: This section is drafted in {style} tone and is intended to {section_intent.lower()}. "
-                f"{body} "
-                f"(Grounded in clause IDs: {', '.join(clause_id_text)}.)"
+                f"{section}\n\n"
+                f"Intent ({style} tone): {section_intent}.\n\n"
+                f"{body}\n\n"
+                f"Source clause IDs: {', '.join(clause_id_text)}."
             )
             if any(word.lower() in text.lower() for word in prohibited):
                 raise ValidationError(f"WRITE produced prohibited commitment language in section '{section}'")
