@@ -6,11 +6,18 @@ from config.settings import app_config
 from services.content_generator import ContentGeneratorService
 from services.oci_rag_client import OCIRAGService
 from services.document_service import DocumentService
+from services.sow_workflow_service import (
+    SOWWorkflowService,
+    WorkflowStage,
+    ValidationError as WorkflowValidationError,
+    StateTransitionError,
+)
 from utils.response_formatter import ResponseFormatter
 from fastapi.responses import PlainTextResponse
 from typing import Optional
 from pydantic import BaseModel
 import mimetypes
+from typing import Dict, Any
 
 # Configure logging
 logging.basicConfig(
@@ -46,11 +53,52 @@ class RAGChatResponse(BaseModel):
     citations: list[str] = []
     guardrail_result: Optional[str] = None
 
+
+class SOWCaseCreateRequest(BaseModel):
+    client_name: str
+    project_scope: str
+    document_type: str
+    industry: str
+    region: str
+    delivery_model: Optional[str] = None
+    assumptions: Optional[list[str]] = None
+
+
+class StagePayloadRequest(BaseModel):
+    payload: Dict[str, Any] = {}
+
+
+class RAGQualityPreviewRequest(BaseModel):
+    intake: Dict[str, Any]
+    sections: list[Dict[str, Any]]
+    top_k: int = 5
+    include_relaxed: bool = True
+
+
 # Initialize services
 content_generator = ContentGeneratorService()
 document_service = DocumentService()
 response_formatter = ResponseFormatter()
 rag_service = OCIRAGService()
+sow_workflow_service = SOWWorkflowService()
+
+
+def _artifact_response(artifact):
+    return {
+        "stage": artifact.stage.value,
+        "version": artifact.version,
+        "created_at": artifact.created_at,
+        "payload": artifact.payload,
+    }
+
+
+def _case_response(sow_case):
+    return {
+        "case_id": sow_case.case_id,
+        "created_at": sow_case.created_at,
+        "stage": sow_case.stage.value,
+        "intake": sow_case.intake,
+    }
 
 # Default template with common placeholders
 DEFAULT_TEMPLATE = """
@@ -173,6 +221,167 @@ async def safe_process_diagram(diagram: UploadFile):
 async def root():
     """Health check endpoint"""
     return {"message": "OCI Document Generator API", "version": "2.0.0", "status": "healthy"}
+
+
+@app.post("/sow-cases")
+async def create_sow_case(request: SOWCaseCreateRequest):
+    try:
+        sow_case = sow_workflow_service.create_case(request.model_dump())
+        return JSONResponse(content={"status": "success", "case": _case_response(sow_case)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/sow-cases/{case_id}/plan")
+async def run_plan(case_id: str, request: StagePayloadRequest):
+    try:
+        artifact = sow_workflow_service.run_plan(case_id, request.payload)
+        return JSONResponse(content={"status": "success", "artifact": _artifact_response(artifact)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StateTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/sow-cases/{case_id}/retrieve")
+async def run_retrieve(case_id: str, request: StagePayloadRequest):
+    try:
+        artifact = sow_workflow_service.run_retrieve(case_id, request.payload)
+        return JSONResponse(content={"status": "success", "artifact": _artifact_response(artifact)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StateTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+
+
+@app.post("/rag-quality/preview")
+async def rag_quality_preview(request: RAGQualityPreviewRequest):
+    try:
+        sections = request.sections or []
+        if not sections:
+            raise WorkflowValidationError("sections must be non-empty")
+
+        reports = []
+        for section in sections:
+            section_name = section.get("name")
+            if not section_name:
+                raise WorkflowValidationError("each section requires a name")
+
+            filters = {
+                "section": section_name,
+                "clause_type": section.get("clause_type", "general"),
+                "risk_level": section.get("max_risk", "medium"),
+                "industry": request.intake.get("industry", "general"),
+                "region": request.intake.get("region", "global"),
+            }
+
+            reports.append(
+                sow_workflow_service.knowledge_access_service.preview_section_quality(
+                    section_name=section_name,
+                    filters=filters,
+                    intake=request.intake,
+                    top_k=request.top_k,
+                    include_relaxed=request.include_relaxed,
+                )
+            )
+
+        quality_rollup = {
+            "total_sections": len(reports),
+            "strict_with_candidates": sum(1 for item in reports if item["strict"]["candidate_count"] > 0),
+            "relaxed_with_candidates": sum(1 for item in reports if (item.get("relaxed") or {}).get("candidate_count", 0) > 0),
+            "no_candidates": sum(
+                1
+                for item in reports
+                if item["strict"]["candidate_count"] == 0
+                and (item.get("relaxed") or {}).get("candidate_count", 0) == 0
+            ),
+        }
+
+        return JSONResponse(content={"status": "success", "quality": quality_rollup, "reports": reports})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+@app.post("/sow-cases/{case_id}/assemble")
+async def run_assemble(case_id: str):
+    try:
+        artifact = sow_workflow_service.run_assemble(case_id)
+        return JSONResponse(content={"status": "success", "artifact": _artifact_response(artifact)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StateTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/sow-cases/{case_id}/write")
+async def run_write(case_id: str, request: StagePayloadRequest):
+    try:
+        artifact = sow_workflow_service.run_write(case_id, request.payload)
+        return JSONResponse(content={"status": "success", "artifact": _artifact_response(artifact)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StateTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/sow-cases/{case_id}/review")
+async def run_review(case_id: str, request: StagePayloadRequest):
+    try:
+        artifact = sow_workflow_service.run_review(case_id, request.payload)
+        return JSONResponse(content={"status": "success", "artifact": _artifact_response(artifact)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StateTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/sow-cases/{case_id}/approve")
+async def approve_case(case_id: str):
+    try:
+        sow_case = sow_workflow_service.approve(case_id)
+        return JSONResponse(content={"status": "success", "case": _case_response(sow_case)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except StateTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.get("/sow-cases/{case_id}")
+async def get_case(case_id: str):
+    try:
+        sow_case = sow_workflow_service.get_case(case_id)
+        return JSONResponse(content={"status": "success", "case": _case_response(sow_case)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/sow-cases/{case_id}/artifacts/{stage}")
+async def get_artifact(case_id: str, stage: WorkflowStage):
+    try:
+        artifact = sow_workflow_service.get_latest_artifact(case_id, stage)
+        return JSONResponse(content={"status": "success", "artifact": _artifact_response(artifact)})
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+
+@app.get("/sow-cases/{case_id}/document.md")
+async def get_case_document_markdown(case_id: str):
+    try:
+        content = sow_workflow_service.render_document_markdown(case_id)
+        return PlainTextResponse(content=content)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/sow-cases/{case_id}/document.html")
+async def get_case_document_html(case_id: str):
+    try:
+        content = sow_workflow_service.render_document_html(case_id)
+        return HTMLResponse(content=content)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 @app.post("/generate/")
 async def generate_json(
