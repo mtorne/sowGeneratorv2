@@ -26,14 +26,7 @@ class KnowledgeAccessService:
         allow_relaxed_retry: bool = True,
         reuse_session: bool = False,
     ) -> List[Dict[str, Any]]:
-        """
-        Retrieve clauses for a section via OCI Agent Runtime and normalize output.
-        Expected shape per clause:
-          - chunk_id
-          - source_uri
-          - score
-          - metadata: {section, clause_type, risk_level}
-        """
+        """Retrieve clauses for a section via OCI Agent Runtime and normalize output."""
         prompt = self._build_prompt(section_name=section_name, filters=filters, intake=intake, top_k=top_k)
         session_id = self._session_id if reuse_session else None
         response = self.rag_service.chat(message=prompt, session_id=session_id)
@@ -94,8 +87,8 @@ class KnowledgeAccessService:
                         # validation is deterministic even if RAG returns a variant
                         # section label (e.g., casing/spacing differences).
                         "section": section_name,
-                        "clause_type": metadata.get("clause_type") or filters.get("clause_type", "general"),
-                        "risk_level": metadata.get("risk_level") or filters.get("risk_level", "medium"),
+                        "tags": metadata.get("tags") or filters.get("tags", []),
+                        "risk_level": metadata.get("risk_level") or filters.get("risk_level", ["medium"]),
                     },
                 }
             )
@@ -181,7 +174,7 @@ class KnowledgeAccessService:
                     "clause_text_preview": str(item.get("clause_text", ""))[:160],
                     "metadata": {
                         "section": (item.get("metadata") or {}).get("section", section_name),
-                        "clause_type": (item.get("metadata") or {}).get("clause_type"),
+                        "tags": (item.get("metadata") or {}).get("tags"),
                         "risk_level": (item.get("metadata") or {}).get("risk_level"),
                     },
                 }
@@ -205,37 +198,53 @@ class KnowledgeAccessService:
 
     @staticmethod
     def _build_prompt(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any], top_k: int) -> str:
+        retrieval_query = KnowledgeAccessService._build_retrieval_query(section_name, filters, intake)
         return (
-            "Retrieve SoW clauses from the knowledge base. "
+            "Retrieve SoW clauses from the knowledge base using only the structured retrieval query. "
+            "Do NOT use any freeform intake text. "
             "Return strict JSON only (no markdown, no prose) with top-level key 'candidates'. "
-            "Each candidate object MUST include: chunk_id, source_uri, score, clause_text, and metadata {section, clause_type, risk_level}.\n"
+            "Each candidate object MUST include: chunk_id, source_uri, score, clause_text, and metadata {section, tags, risk_level}.\n"
             "Rules: "
-            "(1) Prefer clauses tagged for the requested section, but if exact metadata labels differ, still return semantically relevant clauses and set metadata.section to the requested Section string. "
-            "(2) clause_text MUST be non-empty and contain the actual clause body (not a title). "
+            "(1) Respect every filter in retrieval_query. "
+            "(2) clause_text MUST be non-empty and contain the clause body. "
             "(3) If no match exists, return {\"candidates\": []}. "
             "(4) Do not invent source_uri values.\n"
-            f"Section: {section_name}\n"
             f"TopK: {top_k}\n"
-            f"Filters: {json.dumps(filters)}\n"
-            f"Client Context: {json.dumps({'industry': intake.get('industry'), 'region': intake.get('region'), 'document_type': intake.get('document_type')})}\n"
-            "Output schema example: {\"candidates\":[{\"chunk_id\":\"...\",\"source_uri\":\"...\",\"score\":0.91,\"clause_text\":\"...\",\"metadata\":{\"section\":\""
-            + section_name
-            + "\",\"clause_type\":\"scope\",\"risk_level\":\"medium\"}}]}"
+            f"retrieval_query: {json.dumps(retrieval_query)}\n"
+            'Output schema example: {"candidates":[{"chunk_id":"...","source_uri":"...","score":0.91,"clause_text":"...","metadata":{"section":"Architecture","tags":["oci"],"risk_level":["medium"]}}]}'
         )
 
     @staticmethod
     def _build_relaxed_prompt(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any], top_k: int) -> str:
+        retrieval_query = KnowledgeAccessService._build_retrieval_query(section_name, filters, intake)
         return (
-            "Retrieve SoW clauses from the knowledge base for the requested section. "
+            "Retrieve SoW clauses from the knowledge base for the structured retrieval query. "
+            "Use only filter metadata and do not use freeform intake text. "
             "If strict JSON is not possible, still return best-effort candidates as JSON. "
             "Include clause_text whenever available and include citations/URIs if clause text is missing.\n"
-            f"Section: {section_name}\n"
             f"TopK: {top_k}\n"
-            f"Filters: {json.dumps(filters)}\n"
-            f"Client Context: {json.dumps({'industry': intake.get('industry'), 'region': intake.get('region'), 'document_type': intake.get('document_type')})}\n"
+            f"retrieval_query: {json.dumps(retrieval_query)}\n"
             "Do not answer with uncertainty text; always emit candidates array (possibly empty). "
             "Output JSON with key candidates."
         )
+
+
+    @staticmethod
+    def _build_retrieval_query(section_name: str, filters: Dict[str, Any], intake: Dict[str, Any]) -> Dict[str, Any]:
+        query = {"section": section_name}
+        query.update(filters or {})
+        query.setdefault("industry", intake.get("industry"))
+        query.setdefault("region", intake.get("region"))
+        for key in [
+            "deployment_model",
+            "data_isolation",
+            "cloud_provider",
+            "ai_modes",
+            "data_flow",
+            "compliance_requirements",
+        ]:
+            query.setdefault(key, intake.get(key))
+        return {k: v for k, v in query.items() if v not in (None, "", [])}
 
     @staticmethod
     def _extract_candidates(response: Dict[str, Any]) -> List[Dict[str, Any]]:

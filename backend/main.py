@@ -269,13 +269,19 @@ async def rag_quality_preview(request: RAGQualityPreviewRequest):
             if not section_name:
                 raise WorkflowValidationError("each section requires a name")
 
-            filters = {
-                "section": section_name,
-                "clause_type": section.get("clause_type", "general"),
-                "risk_level": section.get("max_risk", "medium"),
-                "industry": request.intake.get("industry", "general"),
-                "region": request.intake.get("region", "global"),
-            }
+            filters = {"section": section_name, **(section.get("clause_filters") or {})}
+            filters.setdefault("industry", request.intake.get("industry", "general"))
+            filters.setdefault("region", request.intake.get("region", "global"))
+            for attr in [
+                "deployment_model",
+                "data_isolation",
+                "cloud_provider",
+                "ai_modes",
+                "data_flow",
+                "compliance_requirements",
+            ]:
+                if attr not in filters and request.intake.get("structured_context"):
+                    filters[attr] = request.intake["structured_context"].get(attr)
 
             reports.append(
                 sow_workflow_service.knowledge_access_service.preview_section_quality(
