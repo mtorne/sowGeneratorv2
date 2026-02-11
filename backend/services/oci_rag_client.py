@@ -4,7 +4,7 @@ import json
 
 from oci import config, retry
 from oci.generative_ai_agent_runtime import GenerativeAiAgentRuntimeClient
-from oci.generative_ai_agent_runtime.models import ChatDetails
+from oci.generative_ai_agent_runtime.models import CreateSessionDetails, ChatDetails
 
 from config.settings import oci_config
 
@@ -28,6 +28,27 @@ class OCIRAGService:
         """Send a chat message to an OCI Agent endpoint and return normalized output."""
         if not self.agent_endpoint_id:
             raise ValueError("OCI agent endpoint id is not configured")
+        
+         # --- FIX STARTS HERE ---
+         # 1. Create a session if we don't have one (first request)
+        if not session_id or session_id == 'new':
+            logger.info("No session_id provided. Creating new OCI GenAI Session...")
+            create_session_details = CreateSessionDetails(
+                display_name="UserSession",
+                description="Chat session initialized via RAG API"
+            )
+            try:
+                session_response = self.client.create_session(
+                    create_session_details=create_session_details,
+                    agent_endpoint_id=self.agent_endpoint_id
+                )
+                session_id = session_response.data.id
+                logger.info("Created new session: %s", session_id)
+            except Exception as e:
+                logger.error("Failed to create session: %s", str(e))
+                raise
+        # --- FIX ENDS HERE ---
+
 
         chat_details = ChatDetails(
             user_message=message,
