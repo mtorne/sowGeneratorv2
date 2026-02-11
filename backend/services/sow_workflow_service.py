@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
@@ -314,52 +315,83 @@ class SOWWorkflowService:
         style = write_input.get("style", "professional")
         prohibited = write_input.get("prohibited_commitments", [])
 
-        structured_sections: List[Dict[str, Any]] = []
+        # Performance knobs: keep deterministic output ordering while reducing end-to-end latency.
+        max_parallel_sections = max(1, int(write_input.get("max_parallel_sections", 3)))
+        writer_max_attempts = max(1, int(write_input.get("writer_max_attempts", 1)))
+        enable_retrieval_retry = bool(write_input.get("enable_retrieval_retry", False))
+        auto_validate = bool(write_input.get("auto_validate", True))
+
         run_diag = {
             "extracted_context": extracted,
             "sections": {},
             "token_usage": {"writer_calls": 0, "estimated_prompt_chars": 0},
+            "performance": {
+                "max_parallel_sections": max_parallel_sections,
+                "writer_max_attempts": writer_max_attempts,
+                "enable_retrieval_retry": enable_retrieval_retry,
+            },
         }
 
-        for section_cfg in plan.get("sections", []):
+        section_order = [item for item in plan.get("sections", [])]
+
+        def _render_section(section_cfg: Dict[str, Any]) -> Dict[str, Any]:
             section_name = section_cfg["name"]
             section_def = self._payload_to_section_definition(section_cfg)
             assembled = blueprint.get(section_name, {})
             candidates = assembled.get("reranked_clauses") or assembled.get("primary_clauses") or []
             writer_mode = self._resolve_writer_mode(section_def.category)
 
-            output, validation_diag = self._write_with_validation_retry(
-                section_def=section_def,
-                section_name=section_name,
-                section_intent=section_cfg.get("intent", ""),
-                style=style,
-                candidates=candidates,
-                intake=sow_case.intake,
-                extracted_context=extracted,
-            )
+            # Fast-path to avoid expensive LLM calls for ungrounded sections.
+            if section_def.category in {"clause", "technical"} and not candidates:
+                output = self._build_tbd_output(section_def)
+                validation_diag = {"attempts": [{"attempt": 0, "writer_mode": writer_mode, "pass": False, "reasons": ["no retrieved clauses"], "fast_path": True}]}
+            else:
+                output, validation_diag = self._write_with_validation_retry(
+                    section_def=section_def,
+                    section_name=section_name,
+                    section_intent=section_cfg.get("intent", ""),
+                    style=style,
+                    candidates=candidates,
+                    intake=sow_case.intake,
+                    extracted_context=extracted,
+                    max_writer_attempts=writer_max_attempts,
+                    enable_retrieval_retry=enable_retrieval_retry,
+                )
 
             markdown = self._render_section_markdown(section_name, section_def.category, output)
             if any(word.lower() in markdown.lower() for word in prohibited):
                 raise ValidationError(f"WRITE produced prohibited commitment language in section '{section_name}'")
 
-            run_diag["token_usage"]["writer_calls"] += 1
-            run_diag["token_usage"]["estimated_prompt_chars"] += len(json.dumps(output))
-            run_diag["sections"][section_name] = {
+            return {
+                "name": section_name,
+                "intent": section_cfg.get("intent", ""),
+                "category": section_def.category,
                 "writer_mode": writer_mode,
-                "validation": validation_diag,
+                "structured_content": output,
+                "draft_markdown": markdown,
+                "source_mapping": [{"paragraph": 1, "clause_ids": [c.get("chunk_id") for c in candidates[:2]]}],
+                "_diag": validation_diag,
             }
 
-            structured_sections.append(
-                {
-                    "name": section_name,
-                    "intent": section_cfg.get("intent", ""),
-                    "category": section_def.category,
-                    "writer_mode": writer_mode,
-                    "structured_content": output,
-                    "draft_markdown": markdown,
-                    "source_mapping": [{"paragraph": 1, "clause_ids": [c.get("chunk_id") for c in candidates[:2]]}],
-                }
-            )
+        structured_by_name: Dict[str, Dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=min(max_parallel_sections, max(1, len(section_order)))) as pool:
+            futures = {pool.submit(_render_section, section_cfg): section_cfg["name"] for section_cfg in section_order}
+            for future, section_name in futures.items():
+                result = future.result()
+                structured_by_name[section_name] = result
+
+        structured_sections: List[Dict[str, Any]] = []
+        for section_cfg in section_order:
+            section_name = section_cfg["name"]
+            section_data = structured_by_name[section_name]
+            run_diag["token_usage"]["writer_calls"] += 1
+            run_diag["token_usage"]["estimated_prompt_chars"] += len(json.dumps(section_data.get("structured_content", {})))
+            run_diag["sections"][section_name] = {
+                "writer_mode": section_data.get("writer_mode"),
+                "validation": section_data.get("_diag", {}),
+            }
+            section_data.pop("_diag", None)
+            structured_sections.append(section_data)
 
         markdown = self._build_document_markdown(sow_case, structured_sections)
         draft_artifact = self._append_artifact(
@@ -376,8 +408,8 @@ class SOWWorkflowService:
         )
         sow_case.stage = WorkflowStage.DRAFTED
 
-        validate_artifact = self.run_validate(case_id)
-        _ = validate_artifact
+        if auto_validate:
+            _ = self.run_validate(case_id)
         return draft_artifact
 
     def run_validate(self, case_id: str) -> WorkflowArtifact:
@@ -692,10 +724,13 @@ class SOWWorkflowService:
         candidates: List[Dict[str, Any]],
         intake: Dict[str, Any],
         extracted_context: Dict[str, Any],
+        max_writer_attempts: int = 1,
+        enable_retrieval_retry: bool = False,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         diagnostics = {"attempts": []}
         output = {}
-        for attempt in range(section_def.fallback_policy.max_retries + 1):
+        attempts = max(1, min(max_writer_attempts, 2))
+        for attempt in range(attempts):
             writer_mode = self._resolve_writer_mode(section_def.category)
             if section_def.category == "template":
                 output = self._generate_from_template(section_name, section_intent, section_def.output_schema, intake)
@@ -723,9 +758,11 @@ class SOWWorkflowService:
             if valid:
                 return output, diagnostics
 
-            clauses, retrieval_diag = self._retrieve_with_fallback(section_def, extracted_context, top_k=8)
-            candidates = self.rerank_clauses({"section": section_name}, clauses)[:4]
-            diagnostics["attempts"][-1]["retrieval_retry"] = retrieval_diag
+            # Expensive fallback (retrieve+rerank) is optional to protect latency.
+            if enable_retrieval_retry and attempt < attempts - 1:
+                clauses, retrieval_diag = self._retrieve_with_fallback(section_def, extracted_context, top_k=8)
+                candidates = self.rerank_clauses({"section": section_name}, clauses)[:4]
+                diagnostics["attempts"][-1]["retrieval_retry"] = retrieval_diag
 
         return self._build_tbd_output(section_def), diagnostics
 
