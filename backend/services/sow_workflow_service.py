@@ -695,7 +695,28 @@ class SOWWorkflowService:
                 top_k=top_k,
                 allow_relaxed_retry=False,
             )
-            attempts.append({"attempt": attempt + 1, "filters_used": query, "returned_count": len(clauses)})
+            retrieval_diag = self.knowledge_access_service.get_last_retrieval_diagnostics()
+            attempts.append(
+                {
+                    "attempt": attempt + 1,
+                    "filters_used": query,
+                    "citations_count": retrieval_diag.get("citations_count", 0),
+                    "candidates_count": retrieval_diag.get("candidates_count", len(clauses)),
+                    "used_source_text": retrieval_diag.get("used_source_text", 0),
+                    "used_fetched_object": retrieval_diag.get("used_fetched_object", 0),
+                    "returned_count": len(clauses),
+                }
+            )
+            logger.info(
+                "Section retrieval attempt | section=%s | attempt=%s | filters=%s | citations=%s | candidates=%s | source_text=%s | fetched_object=%s",
+                section_def.name,
+                attempt + 1,
+                query,
+                retrieval_diag.get("citations_count", 0),
+                retrieval_diag.get("candidates_count", len(clauses)),
+                retrieval_diag.get("used_source_text", 0),
+                retrieval_diag.get("used_fetched_object", 0),
+            )
             if len(clauses) >= section_def.fallback_policy.min_clauses:
                 break
             if attempt < section_def.fallback_policy.max_retries:
