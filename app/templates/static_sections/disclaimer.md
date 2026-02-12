@@ -1,0 +1,1 @@
+This Statement of Work (SoW) is provided for planning and delivery alignment. Final implementation details, timelines, and responsibilities are subject to mutual agreement during execution governance.
