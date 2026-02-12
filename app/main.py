@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import json
 from pathlib import Path
 from typing import Any
 
@@ -176,8 +177,30 @@ def download_generated_file(file_name: str) -> FileResponse:
 
 
 @app.post("/generate-sow", response_model=SowOutput)
-def generate_sow(payload: SowInput) -> SowOutput:
+async def generate_sow(
+    project_data: str = Form(...),
+    current_architecture_image: UploadFile | None = File(None),
+    target_architecture_image: UploadFile | None = File(None),
+) -> SowOutput:
     """Generate SoW DOCX and Markdown files using deterministic section orchestration."""
+    
+    # Parse the JSON string from the form field
+    try:
+        payload_dict = json.loads(project_data)
+        payload = SowInput(**payload_dict)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid project_data JSON: {exc}") from exc
+    
+    # Process uploaded images if needed
+    if current_architecture_image:
+        current_contents = await current_architecture_image.read()
+        logger.info(f"Received current architecture image: {current_architecture_image.filename}, {len(current_contents)} bytes")
+        # Store or process the image...
+    
+    if target_architecture_image:
+        target_contents = await target_architecture_image.read()
+        logger.info(f"Received target architecture image: {target_architecture_image.filename}, {len(target_contents)} bytes")
+
     writer = WriterAgent()
     qa = QAAgent()
 
