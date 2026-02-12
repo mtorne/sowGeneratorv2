@@ -158,3 +158,4 @@ restart.sh.old
 
 # keep only active files, not backups
 .*.bak
+
