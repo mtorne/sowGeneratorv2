@@ -15,6 +15,7 @@ from app.agents.planner import PlannerAgent
 from app.agents.qa import QAAgent
 from app.agents.writer import WriterAgent
 from app.services.doc_builder import DocumentBuilder
+from app.services.llm import LLMConfigurationError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,6 +88,9 @@ def generate_sow(payload: SowInput) -> SowOutput:
         builder = DocumentBuilder(template_path=project_root / "templates" / "sow_template.docx")
         file_name = builder.build(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name)
+    except LLMConfigurationError as exc:
+        logger.warning("SoW generation failed due to OCI configuration: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("SoW generation failed")
         raise HTTPException(status_code=500, detail="Failed to generate SoW") from exc

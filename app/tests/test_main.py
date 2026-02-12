@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.llm import LLMConfigurationError
 
 
 def test_health() -> None:
@@ -63,3 +64,25 @@ def test_cors_preflight_health() -> None:
     )
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "*"
+
+
+def test_generate_sow_missing_oci_config_returns_503(monkeypatch) -> None:
+    """Generate endpoint should surface OCI config issues as a 503 error."""
+
+    def _raise_config_error(_self, _context):
+        raise LLMConfigurationError("Missing required OCI environment variables: OCI_GENAI_ENDPOINT")
+
+    monkeypatch.setattr("app.main.PlannerAgent.plan_sections", _raise_config_error)
+
+    client = TestClient(app)
+    payload = {
+        "client": "Cegid",
+        "project_name": "xrp Modernization",
+        "cloud": "OCI",
+        "scope": "Refactor monolith to microservices",
+        "duration": "4 months",
+    }
+
+    response = client.post("/generate-sow", json=payload)
+    assert response.status_code == 503
+    assert "OCI_GENAI_ENDPOINT" in response.json()["detail"]
