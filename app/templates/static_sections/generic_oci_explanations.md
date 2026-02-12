@@ -1,0 +1,1 @@
+Oracle Cloud Infrastructure (OCI) provides secure, enterprise-grade services across compute, storage, networking, and managed platforms. The proposed design aligns with OCI architectural best practices for security, scalability, and operational resilience.

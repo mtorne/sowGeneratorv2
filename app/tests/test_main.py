@@ -19,17 +19,10 @@ def test_health() -> None:
 
 def test_generate_sow_with_mock_llm(monkeypatch) -> None:
     """Generate endpoint should create docx and markdown outputs in app folder."""
-    responses = iter(
-        [
-            '{"sections": ["Executive Summary", "Scope"]}',
-            "Executive summary content.",
-            "Scope content.",
-            "Reviewed full document.",
-        ]
-    )
+    dynamic_sections = 11
+    responses = iter(["Generated section content."] * dynamic_sections + ["Reviewed full document."])
 
     mock_call = lambda *_args, **_kwargs: next(responses)
-    monkeypatch.setattr("app.agents.planner.call_llm", mock_call)
     monkeypatch.setattr("app.agents.writer.call_llm", mock_call)
     monkeypatch.setattr("app.agents.qa.call_llm", mock_call)
 
@@ -40,6 +33,7 @@ def test_generate_sow_with_mock_llm(monkeypatch) -> None:
         "cloud": "OCI",
         "scope": "Refactor monolith to microservices",
         "duration": "4 months",
+        "services": ["OKE", "MySQL"],
     }
 
     response = client.post("/generate-sow", json=payload)
@@ -57,16 +51,10 @@ def test_generate_sow_with_mock_llm(monkeypatch) -> None:
 
 def test_download_generated_files(monkeypatch) -> None:
     """Download endpoint should return generated docx and markdown files."""
-    responses = iter(
-        [
-            '{"sections": ["Executive Summary"]}',
-            "Executive summary content.",
-            "Reviewed full document.",
-        ]
-    )
+    dynamic_sections = 11
+    responses = iter(["Generated section content."] * dynamic_sections + ["Reviewed full document."])
 
     mock_call = lambda *_args, **_kwargs: next(responses)
-    monkeypatch.setattr("app.agents.planner.call_llm", mock_call)
     monkeypatch.setattr("app.agents.writer.call_llm", mock_call)
     monkeypatch.setattr("app.agents.qa.call_llm", mock_call)
 
@@ -77,6 +65,7 @@ def test_download_generated_files(monkeypatch) -> None:
         "cloud": "OCI",
         "scope": "Refactor monolith to microservices",
         "duration": "4 months",
+        "services": ["OKE", "MySQL"],
     }
 
     generated = client.post("/generate-sow", json=payload).json()
