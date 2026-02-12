@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 import logging
@@ -16,8 +16,14 @@ from utils.response_formatter import ResponseFormatter
 from fastapi.responses import PlainTextResponse
 from typing import Optional
 from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
 import mimetypes
 from typing import Dict, Any
+from agents.architecture_vision_agent import ArchitectureVisionAgent
+from services.architecture_context_builder import ArchitectureContextBuilder
+from services.section_writer import SectionWriter
+from services.architecture_guardrails import ArchitectureGuardrails
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -81,6 +87,9 @@ document_service = DocumentService()
 response_formatter = ResponseFormatter()
 rag_service = OCIRAGService()
 sow_workflow_service = SOWWorkflowService()
+architecture_vision_agent = ArchitectureVisionAgent()
+architecture_context_builder = ArchitectureContextBuilder()
+section_writer = SectionWriter()
 
 
 def _artifact_response(artifact):
@@ -99,6 +108,26 @@ def _case_response(sow_case):
         "stage": sow_case.stage.value,
         "intake": sow_case.intake,
     }
+
+
+
+def _sanitize_for_json(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_for_json(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning("Request validation failed on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _sanitize_for_json(exc.errors())},
+    )
 
 # Default template with common placeholders
 DEFAULT_TEMPLATE = """
@@ -931,6 +960,118 @@ If your custom template fails, the system will use a default template with stand
     finally:
         if temp_file_path and app_config.temp_file_cleanup:
             document_service.cleanup_temp_file(temp_file_path)
+
+
+@app.post("/generate-sow")
+async def generate_sow(request: Request):
+    """Generate deterministic SoW sections with optional multimodal architecture extraction."""
+
+    def _coerce_json_object(raw_value: Any) -> Dict[str, Any]:
+        if raw_value is None:
+            return {}
+        if isinstance(raw_value, bytes):
+            decoded = raw_value.decode("utf-8", errors="replace")
+            return json.loads(decoded)
+        if isinstance(raw_value, str):
+            return json.loads(raw_value)
+        if isinstance(raw_value, dict):
+            return raw_value
+        raise ValueError("project_data must be a JSON object or JSON string")
+
+    project_payload: Dict[str, Any] = {}
+    llm_provider = "meta.llama-3.1-70b-instruct"
+    current_architecture_image: UploadFile | None = None
+    target_architecture_image: UploadFile | None = None
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    try:
+        if "application/json" in content_type:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("JSON body must be an object")
+            project_payload = body.get("project_data") if isinstance(body.get("project_data"), dict) else body
+            llm_provider = str(body.get("llm_provider") or llm_provider)
+        else:
+            form = await request.form()
+            project_payload = _coerce_json_object(form.get("project_data"))
+            llm_provider = str(form.get("llm_provider") or llm_provider)
+            current_value = form.get("current_architecture_image")
+            target_value = form.get("target_architecture_image")
+            current_architecture_image = current_value if isinstance(current_value, UploadFile) else None
+            target_architecture_image = target_value if isinstance(target_value, UploadFile) else None
+    except Exception as exc:
+        logger.warning("Failed to parse /generate-sow payload: %s", exc)
+        raise HTTPException(status_code=400, detail=f"Invalid request payload: {exc}") from exc
+
+    if not isinstance(project_payload, dict):
+        raise HTTPException(status_code=400, detail="project_data must resolve to a JSON object")
+
+    parsed_project_data = project_payload
+
+    current_extracted: Dict[str, Any] = {}
+    target_extracted: Dict[str, Any] = {}
+
+    if current_architecture_image and current_architecture_image.filename:
+        try:
+            current_uri = await safe_process_diagram(current_architecture_image)
+            current_extracted = architecture_vision_agent.extract_architecture_from_image(current_uri, "current")
+        except Exception as exc:
+            logger.warning("Current architecture image parsing failed: %s", exc)
+
+    if target_architecture_image and target_architecture_image.filename:
+        try:
+            target_uri = await safe_process_diagram(target_architecture_image)
+            target_extracted = architecture_vision_agent.extract_architecture_from_image(target_uri, "target")
+        except Exception as exc:
+            logger.warning("Target architecture image parsing failed: %s", exc)
+
+    architecture_context = architecture_context_builder.build(
+        project_data=parsed_project_data,
+        current_architecture_extracted=current_extracted,
+        target_architecture_extracted=target_extracted,
+    )
+
+    architecture_sections = [
+        "CURRENT STATE ARCHITECTURE",
+        "FUTURE STATE ARCHITECTURE",
+        "IMPLEMENTATION DETAILS",
+        "ARCHITECTURE DEPLOYMENT OVERVIEW",
+        "CURRENTLY USED TECHNOLOGY STACK",
+        "OCI SERVICE SIZING",
+    ]
+
+    generated_sections: Dict[str, str] = {}
+    guardrail_findings: Dict[str, Any] = {}
+
+    for section_name in architecture_sections:
+        rag_context = section_writer.retrieve_rag_context(section_name, parsed_project_data)
+        section_text = section_writer.write_section(
+            section_name=section_name,
+            project_data=parsed_project_data,
+            architecture_context=architecture_context,
+            rag_context=rag_context,
+            llm_provider=llm_provider,
+        )
+        generated_sections[section_name] = section_text
+        issues = ArchitectureGuardrails.validate(section_name, section_text, architecture_context)
+        if issues:
+            guardrail_findings[section_name] = issues
+
+    markdown = "\n\n".join([f"## {name}\n{body}" for name, body in generated_sections.items()])
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "sections": generated_sections,
+            "document_markdown": markdown,
+            "architecture_extracted": {
+                "current": current_extracted,
+                "target": target_extracted,
+            },
+            "architecture_context": architecture_context,
+            "guardrail_findings": guardrail_findings,
+        }
+    )
 
 
 @app.post("/chat-rag/", response_model=RAGChatResponse)
