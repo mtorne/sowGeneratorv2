@@ -11,11 +11,12 @@
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .field { margin-bottom: 12px; }
     label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.9rem; }
-    input, textarea { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; box-sizing: border-box; }
+    input, textarea, select { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; box-sizing: border-box; }
     textarea { min-height: 90px; resize: vertical; }
     .actions { display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
     button { border: 0; border-radius: 8px; padding: 10px 14px; background: #2563eb; color: white; cursor: pointer; font-weight: 600; }
     button.secondary { background: #475569; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
     .status { margin-top: 16px; padding: 10px; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; font-size: 0.9rem; white-space: pre-wrap; }
     .output { margin-top: 16px; padding: 12px; border-radius: 8px; background: #0f172a; color: #e2e8f0; white-space: pre-wrap; min-height: 60px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .hint { color: #64748b; font-size: 0.88rem; margin-top: 6px; }
@@ -51,7 +52,14 @@
       <textarea id="scope">Refactor monolith to microservices</textarea>
     </div>
 
-    <div class="actions"><button type="button" id="generateBtn">Generate SoW</button></div>
+    <div class="actions">
+      <button type="button" id="generateBtn">Generate SoW</button>
+      <select id="downloadType">
+        <option value="docx">DOCX</option>
+        <option value="md">Markdown</option>
+      </select>
+      <button type="button" class="secondary" id="downloadBtn" disabled>Download Generated File</button>
+    </div>
 
     <div id="status" class="status">Ready.</div>
     <div id="output" class="output">No response yet.</div>
@@ -60,6 +68,9 @@
   <script>
     const statusEl = document.getElementById('status');
     const outputEl = document.getElementById('output');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const downloadType = document.getElementById('downloadType');
+    let lastGenerated = null;
 
     function normalizeContext(raw) {
       const value = (raw || '').trim();
@@ -89,6 +100,10 @@
         scope: document.getElementById('scope').value,
         duration: document.getElementById('duration').value
       };
+    }
+
+    function updateDownloadButtonState() {
+      downloadBtn.disabled = !lastGenerated;
     }
 
     document.getElementById('sampleBtn').addEventListener('click', () => {
@@ -127,13 +142,35 @@
         outputEl.textContent = JSON.stringify(body, null, 2);
         if (!response.ok) {
           setStatus(`Generate failed: HTTP ${response.status}`, true);
+          lastGenerated = null;
+          updateDownloadButtonState();
           return;
         }
+        lastGenerated = body;
+        updateDownloadButtonState();
         setStatus(`Generate success: ${body.file || 'file not returned'}`);
       } catch (error) {
         setStatus(`Generate failed: ${error.message}`, true);
       }
     });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!lastGenerated) {
+        setStatus('Nothing to download yet. Generate a SoW first.', true);
+        return;
+      }
+      const selectedType = downloadType.value;
+      const fileName = selectedType === 'md' ? lastGenerated.markdown_file : lastGenerated.file;
+      if (!fileName) {
+        setStatus(`No ${selectedType.toUpperCase()} file available in last response.`, true);
+        return;
+      }
+      const path = getPath(`/files/${encodeURIComponent(fileName)}`);
+      setStatus(`Downloading ${fileName} ...`);
+      window.open(path, '_blank');
+    });
+
+    updateDownloadButtonState();
   </script>
 </body>
 </html>

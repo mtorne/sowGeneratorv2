@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.agents.planner import PlannerAgent
@@ -45,9 +46,10 @@ class SowInput(BaseModel):
 
 
 class SowOutput(BaseModel):
-    """Output payload for generated SoW file."""
+    """Output payload for generated SoW files."""
 
     file: str
+    markdown_file: str
 
 
 def _assemble_document(sections: list[tuple[str, str]]) -> str:
@@ -58,15 +60,39 @@ def _assemble_document(sections: list[tuple[str, str]]) -> str:
     return "\n".join(chunks).strip()
 
 
+def _resolve_generated_file(file_name: str) -> Path:
+    """Resolve generated output file under app root and prevent path traversal."""
+    if not file_name or "/" in file_name or "\\" in file_name:
+        raise HTTPException(status_code=400, detail="Invalid file name")
+
+    app_root = Path(__file__).resolve().parent
+    file_path = (app_root / file_name).resolve()
+    if file_path.parent != app_root:
+        raise HTTPException(status_code=400, detail="Invalid file location")
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return file_path
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Basic health endpoint."""
     return {"status": "ok"}
 
 
+@app.get("/files/{file_name}")
+def download_generated_file(file_name: str) -> FileResponse:
+    """Download a generated SoW output file."""
+    file_path = _resolve_generated_file(file_name)
+    media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if file_path.suffix.lower() == ".md":
+        media_type = "text/markdown"
+    return FileResponse(path=str(file_path), filename=file_path.name, media_type=media_type)
+
+
 @app.post("/generate-sow", response_model=SowOutput)
 def generate_sow(payload: SowInput) -> SowOutput:
-    """Generate a Statement of Work DOCX file with manual multi-agent orchestration."""
+    """Generate SoW DOCX and Markdown files with manual multi-agent orchestration."""
     planner = PlannerAgent()
     writer = WriterAgent()
     qa = QAAgent()
@@ -86,7 +112,8 @@ def generate_sow(payload: SowInput) -> SowOutput:
         project_root = Path(__file__).resolve().parent
         builder = DocumentBuilder(template_path=project_root / "templates" / "sow_template.docx")
         file_name = builder.build(full_document=reviewed, output_dir=project_root)
-        return SowOutput(file=file_name)
+        markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
+        return SowOutput(file=file_name, markdown_file=markdown_name)
     except Exception as exc:
         logger.exception("SoW generation failed")
         raise HTTPException(status_code=500, detail="Failed to generate SoW") from exc

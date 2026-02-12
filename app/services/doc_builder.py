@@ -1,4 +1,4 @@
-"""DOCX document assembly service."""
+"""Document assembly services."""
 
 from __future__ import annotations
 
@@ -45,4 +45,13 @@ class DocumentBuilder:
 
         doc.save(str(output_path))
         logger.info("Saved generated SoW document: %s", output_path)
+        return output_name
+
+    def build_markdown(self, full_document: str, output_dir: Path) -> str:
+        """Save generated content as markdown and return file name."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_name = f"output_{uuid4().hex}.md"
+        output_path = output_dir / output_name
+        output_path.write_text(full_document, encoding="utf-8")
+        logger.info("Saved generated SoW markdown: %s", output_path)
         return output_name

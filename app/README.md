@@ -68,6 +68,7 @@ If it does not exist, a default in-memory template is generated automatically wi
 
 - `GET /health`
 - `POST /generate-sow`
+- `GET /files/{file_name}`
 
 ### Example Request
 
@@ -85,6 +86,10 @@ If it does not exist, a default in-memory template is generated automatically wi
 
 ```json
 {
-  "file": "output_xxxxx.docx"
+  "file": "output_xxxxx.docx",
+  "markdown_file": "output_yyyyy.md"
 }
 ```
+
+
+Use `/files/{file_name}` to download either the generated `.docx` or `.md` output.

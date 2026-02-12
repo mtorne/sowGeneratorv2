@@ -18,7 +18,7 @@ def test_health() -> None:
 
 
 def test_generate_sow_with_mock_llm(monkeypatch) -> None:
-    """Generate endpoint should create a docx output in app folder."""
+    """Generate endpoint should create docx and markdown outputs in app folder."""
     responses = iter(
         [
             '{"sections": ["Executive Summary", "Scope"]}',
@@ -46,9 +46,49 @@ def test_generate_sow_with_mock_llm(monkeypatch) -> None:
     assert response.status_code == 200
     body = response.json()
     assert "file" in body
+    assert "markdown_file" in body
     assert body["file"].startswith("output_")
     assert body["file"].endswith(".docx")
+    assert body["markdown_file"].startswith("output_")
+    assert body["markdown_file"].endswith(".md")
     assert (Path("app") / body["file"]).exists()
+    assert (Path("app") / body["markdown_file"]).exists()
+
+
+def test_download_generated_files(monkeypatch) -> None:
+    """Download endpoint should return generated docx and markdown files."""
+    responses = iter(
+        [
+            '{"sections": ["Executive Summary"]}',
+            "Executive summary content.",
+            "Reviewed full document.",
+        ]
+    )
+
+    mock_call = lambda *_args, **_kwargs: next(responses)
+    monkeypatch.setattr("app.agents.planner.call_llm", mock_call)
+    monkeypatch.setattr("app.agents.writer.call_llm", mock_call)
+    monkeypatch.setattr("app.agents.qa.call_llm", mock_call)
+
+    client = TestClient(app)
+    payload = {
+        "client": "Cegid",
+        "project_name": "xrp Modernization",
+        "cloud": "OCI",
+        "scope": "Refactor monolith to microservices",
+        "duration": "4 months",
+    }
+
+    generated = client.post("/generate-sow", json=payload).json()
+    docx_response = client.get(f"/files/{generated['file']}")
+    md_response = client.get(f"/files/{generated['markdown_file']}")
+
+    assert docx_response.status_code == 200
+    assert docx_response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert md_response.status_code == 200
+    assert md_response.headers["content-type"].startswith("text/markdown")
 
 
 def test_cors_preflight_health() -> None:
