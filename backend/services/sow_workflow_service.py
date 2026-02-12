@@ -221,6 +221,13 @@ class SOWWorkflowService:
         top_k = max(1, int(retrieve_input.get("top_k", 8)))
         allow_partial = bool(retrieve_input.get("allow_partial", False))
         selected_names = set(retrieve_input.get("section_names") or section_defs.keys())
+        max_retries_override = retrieve_input.get("max_retries_per_section")
+        min_clauses_override = retrieve_input.get("min_clauses_per_section")
+
+        if max_retries_override is not None:
+            max_retries_override = max(0, int(max_retries_override))
+        if min_clauses_override is not None:
+            min_clauses_override = max(1, int(min_clauses_override))
 
         retrieval_set: Dict[str, List[Dict[str, Any]]] = {}
         diagnostics: Dict[str, Any] = {}
@@ -230,7 +237,13 @@ class SOWWorkflowService:
             if section_name not in selected_names:
                 continue
             section_def = self._payload_to_section_definition(section_payload)
-            clauses, section_diag = self._retrieve_with_fallback(section_def, extracted, top_k)
+            clauses, section_diag = self._retrieve_with_fallback(
+                section_def,
+                extracted,
+                top_k,
+                max_retries_override=max_retries_override,
+                min_clauses_override=min_clauses_override,
+            )
             retrieval_set[section_name] = clauses
             diagnostics[section_name] = section_diag
 
@@ -681,12 +694,28 @@ class SOWWorkflowService:
                 query[key] = value
         return query
 
-    def _retrieve_with_fallback(self, section_def: SectionDefinition, extracted_context: Dict[str, Any], top_k: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    def _retrieve_with_fallback(
+        self,
+        section_def: SectionDefinition,
+        extracted_context: Dict[str, Any],
+        top_k: int,
+        max_retries_override: Optional[int] = None,
+        min_clauses_override: Optional[int] = None,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         attempts = []
         relaxed_dimensions: List[str] = []
         clauses: List[Dict[str, Any]] = []
+        configured_min = int(section_def.fallback_policy.min_clauses)
+        effective_min_clauses = min(configured_min, top_k)
+        if min_clauses_override is not None:
+            effective_min_clauses = min(max(1, int(min_clauses_override)), top_k)
 
-        for attempt in range(section_def.fallback_policy.max_retries + 1):
+        configured_max_retries = int(section_def.fallback_policy.max_retries)
+        effective_max_retries = configured_max_retries
+        if max_retries_override is not None:
+            effective_max_retries = min(max(0, int(max_retries_override)), configured_max_retries)
+
+        for attempt in range(effective_max_retries + 1):
             query = self.build_retrieval_query(section_def, extracted_context, relaxed_dimensions)
             clauses = self.knowledge_access_service.retrieve_section_clauses(
                 section_name=section_def.name,
@@ -695,15 +724,42 @@ class SOWWorkflowService:
                 top_k=top_k,
                 allow_relaxed_retry=False,
             )
-            attempts.append({"attempt": attempt + 1, "filters_used": query, "returned_count": len(clauses)})
-            if len(clauses) >= section_def.fallback_policy.min_clauses:
+            retrieval_diag = self.knowledge_access_service.get_last_retrieval_diagnostics()
+            attempts.append(
+                {
+                    "attempt": attempt + 1,
+                    "filters_used": query,
+                    "citations_count": retrieval_diag.get("citations_count", 0),
+                    "candidates_count": retrieval_diag.get("candidates_count", len(clauses)),
+                    "used_source_text": retrieval_diag.get("used_source_text", 0),
+                    "used_fetched_object": retrieval_diag.get("used_fetched_object", 0),
+                    "returned_count": len(clauses),
+                }
+            )
+            logger.info(
+                "Section retrieval attempt | section=%s | attempt=%s | filters=%s | citations=%s | candidates=%s | source_text=%s | fetched_object=%s",
+                section_def.name,
+                attempt + 1,
+                query,
+                retrieval_diag.get("citations_count", 0),
+                retrieval_diag.get("candidates_count", len(clauses)),
+                retrieval_diag.get("used_source_text", 0),
+                retrieval_diag.get("used_fetched_object", 0),
+            )
+            if len(clauses) >= effective_min_clauses:
                 break
-            if attempt < section_def.fallback_policy.max_retries:
+            if attempt < effective_max_retries:
                 relax_key = section_def.fallback_policy.relaxation_order[min(attempt, len(section_def.fallback_policy.relaxation_order) - 1)]
                 if relax_key != "section":
                     relaxed_dimensions.append(relax_key)
 
-        return clauses, {"attempts": attempts, "final_count": len(clauses), "relaxed_dimensions": relaxed_dimensions}
+        return clauses, {
+            "attempts": attempts,
+            "final_count": len(clauses),
+            "relaxed_dimensions": relaxed_dimensions,
+            "effective_min_clauses": effective_min_clauses,
+            "effective_max_retries": effective_max_retries,
+        }
 
     @staticmethod
     def rerank_clauses(query: Dict[str, Any], clauses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
