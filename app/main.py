@@ -9,10 +9,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi import Form, File, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.agents.qa import QAAgent
@@ -128,6 +128,37 @@ def _disallowed_services(context: dict[str, Any]) -> list[str]:
         return []
     return sorted(service for service in KNOWN_SERVICES if service not in allowed)
 
+
+
+
+def _sanitize_validation_value(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray)):
+        return f"<binary data, {len(value)} bytes>"
+    if isinstance(value, dict):
+        return {str(k): _sanitize_validation_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_validation_value(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    sanitized_errors: list[dict[str, Any]] = []
+    for raw_error in exc.errors():
+        item = dict(raw_error)
+        if "input" in item:
+            item["input"] = _sanitize_validation_value(item.get("input"))
+        if "ctx" in item:
+            item["ctx"] = _sanitize_validation_value(item.get("ctx"))
+        sanitized_errors.append(_sanitize_validation_value(item))
+    logger.warning("Request validation failed on %s", request.url.path)
+    return JSONResponse(status_code=422, content={"detail": sanitized_errors})
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    """Health endpoint for proxy roots."""
+    return {"status": "ok"}
 
 @app.get("/health")
 def health() -> dict[str, str]:
