@@ -36,6 +36,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+KNOWN_SERVICES = {
+    "oke",
+    "mysql",
+    "streaming",
+    "object storage",
+    "compute",
+    "load balancer",
+    "autonomous database",
+    "api gateway",
+    "vault",
+    "waf",
+}
+
 
 
 class ServiceValidationError(RuntimeError):
