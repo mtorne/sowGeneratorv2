@@ -445,8 +445,10 @@
 
     function loadRetrieveTemplate() {
       document.getElementById('payload').value = pretty({
-        top_k: 2,
+        top_k: 8,
         allow_partial: true,
+        max_retries_per_section: 1,
+        min_clauses_per_section: 2,
         section_names: [
           'DISCLAIMER',
           'PROJECT FRAMEWORK',
