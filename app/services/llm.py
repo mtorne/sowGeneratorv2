@@ -79,6 +79,11 @@ def _extract_text(response: object) -> str:
 
 def call_llm(system_prompt: str, user_prompt: str) -> str:
     """Send a prompt to OCI Generative AI and return plain text response."""
+    mock_response = os.getenv("MOCK_LLM_RESPONSE")
+    if mock_response is not None:
+        logger.info("Using MOCK_LLM_RESPONSE for local testing")
+        return mock_response
+
     config = LLMConfig.from_env()
     client = _build_client(config)
 

@@ -10,7 +10,7 @@ pip install -r app/requirements.txt
 
 ## Environment Variables
 
-Set the following variables before running:
+Set the following variables before running with OCI:
 
 - `OCI_CONFIG_FILE`
 - `OCI_PROFILE`
@@ -29,6 +29,32 @@ Optional:
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+## Test
+
+```bash
+pytest -q app/tests
+```
+
+## Local Testing Without OCI
+
+Use a fixed mock output from the LLM wrapper:
+
+```bash
+export MOCK_LLM_RESPONSE='{"sections":["Executive Summary","Scope"]}'
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Unset it when testing with OCI:
+
+```bash
+unset MOCK_LLM_RESPONSE
+```
+
+## Template Behavior
+
+The service looks for `app/templates/sow_template.docx`.
+If it does not exist, a default in-memory template is generated automatically with `{{FULL_DOCUMENT}}`.
 
 ## API
 

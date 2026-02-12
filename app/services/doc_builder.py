@@ -18,13 +18,22 @@ class DocumentBuilder:
         """Initialize builder with a template path."""
         self.template_path = template_path
 
+    def _load_or_create_template(self) -> Document:
+        """Load template from disk or create an in-memory default template."""
+        if self.template_path.exists():
+            return Document(str(self.template_path))
+        logger.warning("Template not found at %s. Using generated fallback template", self.template_path)
+        doc = Document()
+        doc.add_paragraph("{{FULL_DOCUMENT}}")
+        return doc
+
     def build(self, full_document: str, output_dir: Path) -> str:
         """Render template and save output file name."""
         output_dir.mkdir(parents=True, exist_ok=True)
         output_name = f"output_{uuid4().hex}.docx"
         output_path = output_dir / output_name
 
-        doc = Document(str(self.template_path))
+        doc = self._load_or_create_template()
         replaced = False
         for paragraph in doc.paragraphs:
             if "{{FULL_DOCUMENT}}" in paragraph.text:
