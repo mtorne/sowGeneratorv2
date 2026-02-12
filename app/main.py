@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
+import imghdr
 import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.agents.qa import QAAgent
@@ -127,6 +130,37 @@ def _disallowed_services(context: dict[str, Any]) -> list[str]:
     return sorted(service for service in KNOWN_SERVICES if service not in allowed)
 
 
+
+
+def _sanitize_validation_value(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray)):
+        return f"<binary data, {len(value)} bytes>"
+    if isinstance(value, dict):
+        return {str(k): _sanitize_validation_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_validation_value(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    sanitized_errors: list[dict[str, Any]] = []
+    for raw_error in exc.errors():
+        item = dict(raw_error)
+        if "input" in item:
+            item["input"] = _sanitize_validation_value(item.get("input"))
+        if "ctx" in item:
+            item["ctx"] = _sanitize_validation_value(item.get("ctx"))
+        sanitized_errors.append(_sanitize_validation_value(item))
+    logger.warning("Request validation failed on %s", request.url.path)
+    return JSONResponse(status_code=422, content={"detail": sanitized_errors})
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    """Health endpoint for proxy roots."""
+    return {"status": "ok"}
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Basic health endpoint."""
@@ -143,15 +177,101 @@ def download_generated_file(file_name: str) -> FileResponse:
     return FileResponse(path=str(file_path), filename=file_path.name, media_type=media_type)
 
 
+
+
+def _analyze_uploaded_image(file_name: str, content: bytes, diagram_role: str) -> dict[str, Any]:
+    fmt = (imghdr.what(None, h=content) or "unknown").lower()
+    analysis = {
+        "diagram_role": diagram_role,
+        "file_name": file_name,
+        "format": fmt,
+        "size_bytes": len(content),
+    }
+
+    lower_name = (file_name or "").lower()
+    inferred_components: list[str] = []
+    for token, label in [
+        ("oke", "OKE"),
+        ("k8s", "Kubernetes"),
+        ("kubernetes", "Kubernetes"),
+        ("mysql", "MySQL"),
+        ("postgres", "PostgreSQL"),
+        ("lb", "Load Balancer"),
+        ("drg", "DRG"),
+        ("vpn", "VPN"),
+    ]:
+        if token in lower_name and label not in inferred_components:
+            inferred_components.append(label)
+
+    analysis["inferred_components"] = inferred_components
+    return analysis
+
+
+def _inject_diagram_analysis_context(section: str, section_content: str, context: dict[str, Any]) -> str:
+    architecture = context.get("architecture_analysis") if isinstance(context.get("architecture_analysis"), dict) else {}
+    current = architecture.get("current") if isinstance(architecture.get("current"), dict) else None
+    target = architecture.get("target") if isinstance(architecture.get("target"), dict) else None
+
+    notes: list[str] = []
+    upper = section.upper()
+    if "CURRENT STATE ARCHITECTURE" in upper and current:
+        notes.append(
+            f"Current diagram analyzed: file={current.get('file_name')}, format={current.get('format')}, size={current.get('size_bytes')} bytes."
+        )
+        components = current.get("inferred_components") or []
+        if components:
+            notes.append(f"Current diagram inferred components: {', '.join(components)}.")
+    if "FUTURE STATE ARCHITECTURE" in upper and target:
+        notes.append(
+            f"Target diagram analyzed: file={target.get('file_name')}, format={target.get('format')}, size={target.get('size_bytes')} bytes."
+        )
+        components = target.get("inferred_components") or []
+        if components:
+            notes.append(f"Target diagram inferred components: {', '.join(components)}.")
+
+    if not notes:
+        return section_content
+    return section_content.rstrip() + "\n\nDiagram analysis evidence:\n- " + "\n- ".join(notes)
+
 @app.post("/generate-sow", response_model=SowOutput)
-def generate_sow(payload: SowInput) -> SowOutput:
+async def generate_sow(
+    request: Request,
+    project_data: str | None = Form(None),
+    current_architecture_image: UploadFile | None = File(None),
+    target_architecture_image: UploadFile | None = File(None),
+) -> SowOutput:
     """Generate SoW DOCX and Markdown files using deterministic section orchestration."""
     writer = WriterAgent()
     qa = QAAgent()
 
-    context: dict[str, Any] = payload.model_dump()
-
     try:
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "application/json" in content_type:
+            body = await request.json()
+            payload_model = SowInput(**body)
+        else:
+            payload_raw = project_data
+            if (payload_raw is None or not payload_raw.strip()) and hasattr(request, "form"):
+                form = await request.form()
+                payload_raw = str(form.get("project_data") or "")
+            if not payload_raw:
+                raise HTTPException(status_code=400, detail="project_data is required")
+            payload_model = SowInput(**json.loads(payload_raw))
+
+        context: dict[str, Any] = payload_model.model_dump()
+
+        architecture_analysis: dict[str, Any] = {}
+        if current_architecture_image and current_architecture_image.filename:
+            current_bytes = await current_architecture_image.read()
+            architecture_analysis["current"] = _analyze_uploaded_image(current_architecture_image.filename, current_bytes, "current")
+            await current_architecture_image.seek(0)
+        if target_architecture_image and target_architecture_image.filename:
+            target_bytes = await target_architecture_image.read()
+            architecture_analysis["target"] = _analyze_uploaded_image(target_architecture_image.filename, target_bytes, "target")
+            await target_architecture_image.seek(0)
+        if architecture_analysis:
+            context["architecture_analysis"] = architecture_analysis
+
         project_root = Path(__file__).resolve().parent
         structure = StructureController(template_root=project_root / "templates")
         rag_service = SectionAwareRAGService.from_env()
@@ -178,6 +298,7 @@ def generate_sow(payload: SowInput) -> SowOutput:
                             f"Disallowed services in {section}: {', '.join(sorted(invalid_services))}"
                         )
 
+            section_content = _inject_diagram_analysis_context(section, section_content, context)
             drafted_sections.append((section, section_content))
 
         assembled = _assemble_document(drafted_sections)
