@@ -1,19 +1,19 @@
 from oci import config, retry
 from oci.generative_ai_inference import GenerativeAiInferenceClient
-from oci.generative_ai_inference.models import (
-    BaseChatRequest,
-    ChatDetails,
-    CohereChatRequest,
-    GenericChatRequest,
-    ImageContent,
-    ImageUrl,
-    JsonSchemaResponseFormat,
-    Message,
-    OnDemandServingMode,
-    ResponseJsonSchema,
-    TextContent,
-)
+from oci.generative_ai_inference import models as oci_models
 from typing import Any, Dict, List, Optional
+
+BaseChatRequest = oci_models.BaseChatRequest
+ChatDetails = oci_models.ChatDetails
+CohereChatRequest = oci_models.CohereChatRequest
+GenericChatRequest = oci_models.GenericChatRequest
+ImageContent = oci_models.ImageContent
+ImageUrl = oci_models.ImageUrl
+Message = oci_models.Message
+OnDemandServingMode = oci_models.OnDemandServingMode
+TextContent = oci_models.TextContent
+JsonSchemaResponseFormat = getattr(oci_models, "JsonSchemaResponseFormat", None)
+ResponseJsonSchema = getattr(oci_models, "ResponseJsonSchema", None)
 import logging
 from config.settings import oci_config
 
@@ -38,7 +38,7 @@ class OCIGenAIService:
         self.model_llama_vision = getattr(oci_config, "model_id_vision", "meta.llama-3.2-90b-vision-instruct")
         self.model_cohere = getattr(oci_config, "model_id_cohere", "cohere.command-r-plus")
 
-    def _build_response_format(self, response_format: Optional[Dict[str, Any]]) -> Optional[JsonSchemaResponseFormat]:
+    def _build_response_format(self, response_format: Optional[Dict[str, Any]]) -> Optional[Any]:
         """Build OCI SDK response_format object from dict payload.
 
         Expected input shape:
@@ -54,6 +54,9 @@ class OCIGenAIService:
         if not response_format:
             return None
         if str(response_format.get("type", "")).upper() != "JSON_SCHEMA":
+            return None
+        if JsonSchemaResponseFormat is None or ResponseJsonSchema is None:
+            logger.info("OCI SDK does not support JSON schema response_format; continuing without it.")
             return None
 
         schema_cfg = response_format.get("json_schema") or {}
