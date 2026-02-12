@@ -152,7 +152,13 @@ class OCIGenAIService:
         text = str(exc).lower()
         return "please pass in correct format of request" in text or "status': 400" in text or '"status": 400' in text
 
-    def analyze_diagram(self, image_data_uri: str, prompt: str, model_id: str = None) -> str:
+    def analyze_diagram(
+        self,
+        image_data_uri: str,
+        prompt: str,
+        model_id: str = None,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
         target_model = model_id if model_id else self.model_llama_vision
         logger.info(f"Analyzing diagram... Model: {target_model}")
         image_content = ImageContent(image_url=ImageUrl(url=image_data_uri))
@@ -167,8 +173,22 @@ class OCIGenAIService:
             [message],
             max_tokens=self._resolve_max_tokens(target_model),
             top_k_override=safe_top_k,
+            response_format=response_format,
         )
-        return self._call_model(target_model, request)
+
+        try:
+            return self._call_model(target_model, request)
+        except Exception as exc:
+            if response_format and self._is_request_format_error(exc):
+                logger.warning("Retrying diagram analysis without response_format due to 400 request format validation.")
+                fallback_request = self._build_generic_request(
+                    [message],
+                    max_tokens=self._resolve_max_tokens(target_model),
+                    top_k_override=safe_top_k,
+                    response_format=None,
+                )
+                return self._call_model(target_model, fallback_request)
+            raise
 
     def generate_text_content(
         self,
