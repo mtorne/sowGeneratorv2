@@ -50,8 +50,8 @@ class RAGChatRequest(BaseModel):
 class RAGChatResponse(BaseModel):
     answer: str
     session_id: Optional[str] = None
-    citations: list[str] = []
-    guardrail_result: Optional[str] = None
+    citations: list[Dict[str, Any] | str] = []
+    guardrail_result: Optional[Any] = None
 
 
 class SOWCaseCreateRequest(BaseModel):
