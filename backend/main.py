@@ -48,6 +48,16 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def unicode_decode_protection_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except UnicodeDecodeError as exc:
+        logger.error("Unicode decode error while processing request %s: %s", request.url.path, exc)
+        return JSONResponse(status_code=400, content={"detail": "Malformed multipart/form-data payload"})
+
+
+
 class RAGChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
@@ -249,6 +259,12 @@ async def safe_process_diagram(diagram: UploadFile):
 @app.get("/")
 async def root():
     """Health check endpoint"""
+    return {"message": "OCI Document Generator API", "version": "2.0.0", "status": "healthy"}
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint alias for reverse-proxy prefixes."""
     return {"message": "OCI Document Generator API", "version": "2.0.0", "status": "healthy"}
 
 
