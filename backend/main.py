@@ -963,50 +963,19 @@ If your custom template fails, the system will use a default template with stand
 
 
 @app.post("/generate-sow")
-async def generate_sow(request: Request):
+async def generate_sow(
+    project_data: str = Form(..., description="JSON payload for project context"),
+    llm_provider: str = Form("meta.llama-3.1-70b-instruct"),
+    current_architecture_image: UploadFile = File(None, description="Optional current architecture diagram"),
+    target_architecture_image: UploadFile = File(None, description="Optional target architecture diagram"),
+):
     """Generate deterministic SoW sections with optional multimodal architecture extraction."""
-
-    def _coerce_json_object(raw_value: Any) -> Dict[str, Any]:
-        if raw_value is None:
-            return {}
-        if isinstance(raw_value, bytes):
-            decoded = raw_value.decode("utf-8", errors="replace")
-            return json.loads(decoded)
-        if isinstance(raw_value, str):
-            return json.loads(raw_value)
-        if isinstance(raw_value, dict):
-            return raw_value
-        raise ValueError("project_data must be a JSON object or JSON string")
-
-    project_payload: Dict[str, Any] = {}
-    llm_provider = "meta.llama-3.1-70b-instruct"
-    current_architecture_image: UploadFile | None = None
-    target_architecture_image: UploadFile | None = None
-
-    content_type = (request.headers.get("content-type") or "").lower()
     try:
-        if "application/json" in content_type:
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise ValueError("JSON body must be an object")
-            project_payload = body.get("project_data") if isinstance(body.get("project_data"), dict) else body
-            llm_provider = str(body.get("llm_provider") or llm_provider)
-        else:
-            form = await request.form()
-            project_payload = _coerce_json_object(form.get("project_data"))
-            llm_provider = str(form.get("llm_provider") or llm_provider)
-            current_value = form.get("current_architecture_image")
-            target_value = form.get("target_architecture_image")
-            current_architecture_image = current_value if isinstance(current_value, UploadFile) else None
-            target_architecture_image = target_value if isinstance(target_value, UploadFile) else None
+        parsed_project_data = json.loads(project_data)
+        if not isinstance(parsed_project_data, dict):
+            raise ValueError("project_data must deserialize to a JSON object")
     except Exception as exc:
-        logger.warning("Failed to parse /generate-sow payload: %s", exc)
-        raise HTTPException(status_code=400, detail=f"Invalid request payload: {exc}") from exc
-
-    if not isinstance(project_payload, dict):
-        raise HTTPException(status_code=400, detail="project_data must resolve to a JSON object")
-
-    parsed_project_data = project_payload
+        raise HTTPException(status_code=400, detail=f"Invalid project_data payload: {exc}") from exc
 
     current_extracted: Dict[str, Any] = {}
     target_extracted: Dict[str, Any] = {}
