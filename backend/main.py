@@ -16,6 +16,7 @@ from utils.response_formatter import ResponseFormatter
 from fastapi.responses import PlainTextResponse
 from typing import Optional
 from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
 import mimetypes
 from typing import Dict, Any
 from agents.architecture_vision_agent import ArchitectureVisionAgent
@@ -107,6 +108,26 @@ def _case_response(sow_case):
         "stage": sow_case.stage.value,
         "intake": sow_case.intake,
     }
+
+
+
+def _sanitize_for_json(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_for_json(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning("Request validation failed on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _sanitize_for_json(exc.errors())},
+    )
 
 # Default template with common placeholders
 DEFAULT_TEMPLATE = """
