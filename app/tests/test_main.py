@@ -49,3 +49,17 @@ def test_generate_sow_with_mock_llm(monkeypatch) -> None:
     assert body["file"].startswith("output_")
     assert body["file"].endswith(".docx")
     assert (Path("app") / body["file"]).exists()
+
+
+def test_cors_preflight_health() -> None:
+    """CORS preflight should be accepted for browser clients."""
+    client = TestClient(app)
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "https://sowgen.enrot.es",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "*"
