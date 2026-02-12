@@ -20,6 +20,7 @@
     .status { margin-top: 16px; padding: 10px; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; font-size: 0.9rem; white-space: pre-wrap; }
     .output { margin-top: 16px; padding: 12px; border-radius: 8px; background: #0f172a; color: #e2e8f0; white-space: pre-wrap; min-height: 60px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .hint { color: #64748b; font-size: 0.88rem; margin-top: 6px; }
+    .file-meta { color: #475569; font-size: 0.85rem; margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -52,6 +53,19 @@
       <textarea id="scope">Refactor monolith to microservices</textarea>
     </div>
 
+    <div class="row">
+      <div class="field">
+        <label for="currentArchitectureImage">Current Architecture Diagram (optional)</label>
+        <input id="currentArchitectureImage" type="file" accept="image/*" />
+        <div id="currentArchitectureImageMeta" class="file-meta">No file selected.</div>
+      </div>
+      <div class="field">
+        <label for="targetArchitectureImage">Target Architecture Diagram (optional)</label>
+        <input id="targetArchitectureImage" type="file" accept="image/*" />
+        <div id="targetArchitectureImageMeta" class="file-meta">No file selected.</div>
+      </div>
+    </div>
+
     <div class="actions">
       <button type="button" id="generateBtn">Generate SoW</button>
       <select id="downloadType">
@@ -70,6 +84,10 @@
     const outputEl = document.getElementById('output');
     const downloadBtn = document.getElementById('downloadBtn');
     const downloadType = document.getElementById('downloadType');
+    const currentArchitectureImage = document.getElementById('currentArchitectureImage');
+    const targetArchitectureImage = document.getElementById('targetArchitectureImage');
+    const currentArchitectureImageMeta = document.getElementById('currentArchitectureImageMeta');
+    const targetArchitectureImageMeta = document.getElementById('targetArchitectureImageMeta');
     let lastGenerated = null;
 
     function normalizeContext(raw) {
@@ -106,6 +124,19 @@
       downloadBtn.disabled = !lastGenerated;
     }
 
+    function updateFileMeta(inputEl, metaEl) {
+      const file = inputEl.files && inputEl.files[0];
+      if (!file) {
+        metaEl.textContent = 'No file selected.';
+        return;
+      }
+      const kb = Math.max(1, Math.round(file.size / 1024));
+      metaEl.textContent = `${file.name} (${kb} KB)`;
+    }
+
+    currentArchitectureImage.addEventListener('change', () => updateFileMeta(currentArchitectureImage, currentArchitectureImageMeta));
+    targetArchitectureImage.addEventListener('change', () => updateFileMeta(targetArchitectureImage, targetArchitectureImageMeta));
+
     document.getElementById('sampleBtn').addEventListener('click', () => {
       document.getElementById('client').value = 'Cegid';
       document.getElementById('project_name').value = 'xrp Modernization';
@@ -116,7 +147,7 @@
     });
 
     document.getElementById('healthBtn').addEventListener('click', async () => {
-      const path = getPath('/health');
+      const path = getPath('/');
       setStatus(`Calling ${path} ...`);
       try {
         const response = await fetch(path);
@@ -131,12 +162,23 @@
     document.getElementById('generateBtn').addEventListener('click', async () => {
       const path = getPath('/generate-sow');
       const payload = getPayload();
-      setStatus(`Posting to ${path} ...`);
+      const formData = new FormData();
+      formData.append('project_data', JSON.stringify(payload));
+
+      const currentFile = currentArchitectureImage.files && currentArchitectureImage.files[0];
+      const targetFile = targetArchitectureImage.files && targetArchitectureImage.files[0];
+      if (currentFile) {
+        formData.append('current_architecture_image', currentFile, currentFile.name);
+      }
+      if (targetFile) {
+        formData.append('target_architecture_image', targetFile, targetFile.name);
+      }
+
+      setStatus(`Posting multipart request to ${path} ...`);
       try {
         const response = await fetch(path, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: formData
         });
         const body = await response.json();
         outputEl.textContent = JSON.stringify(body, null, 2);
@@ -148,7 +190,7 @@
         }
         lastGenerated = body;
         updateDownloadButtonState();
-        setStatus(`Generate success: ${body.file || 'file not returned'}`);
+        setStatus('Generate success. Sections generated in JSON response.');
       } catch (error) {
         setStatus(`Generate failed: ${error.message}`, true);
       }
