@@ -13,7 +13,7 @@
     .msg { padding: 10px 12px; border-radius: 10px; max-width: 85%; white-space: pre-wrap; }
     .user { align-self: flex-end; background: #d1fae5; }
     .bot { align-self: flex-start; background: #e5e7eb; }
-    .meta { font-size: 12px; color: #475569; margin-top: 4px; }
+    .meta { font-size: 12px; color: #475569; margin-top: 4px; white-space: pre-wrap; }
     .composer { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 16px; border-top: 1px solid #e5e7eb; }
     textarea { width: 100%; min-height: 64px; resize: vertical; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; font: inherit; }
     button { background: #059669; color: #fff; border: none; border-radius: 8px; padding: 10px 16px; font-weight: 600; cursor: pointer; }
@@ -85,6 +85,29 @@
 
     let sessionId = null;
 
+    function formatCitation(citation, idx) {
+      if (typeof citation === 'string') {
+        return citation;
+      }
+      if (!citation || typeof citation !== 'object') {
+        return `citation-${idx + 1}`;
+      }
+
+      const sourceLocation = citation.source_location || {};
+      const metadata = citation.metadata || {};
+      const sourceUri = sourceLocation.url || citation.source_uri || metadata.customized_url_source || citation.doc_id || citation.documentId || '';
+      const title = citation.title || metadata.title || '';
+      const sourceText = String(citation.source_text || '').trim();
+      const preview = sourceText ? sourceText.slice(0, 140).replace(/\s+/g, ' ') : '';
+
+      const parts = [];
+      if (title) parts.push(title);
+      if (sourceUri) parts.push(sourceUri);
+      if (preview) parts.push(`“${preview}${sourceText.length > 140 ? '…' : ''}”`);
+
+      return parts.length ? parts.join(' | ') : `citation-${idx + 1}`;
+    }
+
     function appendMessage(role, text, citations = []) {
       const wrap = document.createElement('div');
       wrap.className = `msg ${role === 'user' ? 'user' : 'bot'}`;
@@ -94,7 +117,9 @@
       if (citations.length) {
         const meta = document.createElement('div');
         meta.className = 'meta';
-        meta.textContent = `Citations: ${citations.join(', ')}`;
+
+        const lines = citations.map((citation, idx) => `• ${formatCitation(citation, idx)}`);
+        meta.textContent = `Citations\n${lines.join('\n')}`;
         messagesEl.appendChild(meta);
       }
 
