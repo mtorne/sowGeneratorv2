@@ -50,6 +50,12 @@ app.add_middleware(
 
 @app.middleware("http")
 async def unicode_decode_protection_middleware(request: Request, call_next):
+    if request.method in {"GET", "HEAD"} and request.url.path == "/":
+        return JSONResponse(
+            status_code=200,
+            content={"message": "OCI Document Generator API", "version": "2.0.0", "status": "healthy"},
+        )
+
     try:
         return await call_next(request)
     except UnicodeDecodeError as exc:
