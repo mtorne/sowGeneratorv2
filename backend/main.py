@@ -18,6 +18,11 @@ from typing import Optional
 from pydantic import BaseModel
 import mimetypes
 from typing import Dict, Any
+from agents.architecture_vision_agent import ArchitectureVisionAgent
+from services.architecture_context_builder import ArchitectureContextBuilder
+from services.section_writer import SectionWriter
+from services.architecture_guardrails import ArchitectureGuardrails
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -81,6 +86,9 @@ document_service = DocumentService()
 response_formatter = ResponseFormatter()
 rag_service = OCIRAGService()
 sow_workflow_service = SOWWorkflowService()
+architecture_vision_agent = ArchitectureVisionAgent()
+architecture_context_builder = ArchitectureContextBuilder()
+section_writer = SectionWriter()
 
 
 def _artifact_response(artifact):
@@ -931,6 +939,87 @@ If your custom template fails, the system will use a default template with stand
     finally:
         if temp_file_path and app_config.temp_file_cleanup:
             document_service.cleanup_temp_file(temp_file_path)
+
+
+@app.post("/generate-sow")
+async def generate_sow(
+    project_data: str = Form(..., description="JSON string containing project metadata"),
+    llm_provider: str = Form("meta.llama-3.1-70b-instruct"),
+    current_architecture_image: UploadFile = File(None, description="Optional current architecture diagram"),
+    target_architecture_image: UploadFile = File(None, description="Optional target architecture diagram"),
+):
+    """Generate deterministic SoW sections with optional multimodal architecture extraction."""
+    try:
+        parsed_project_data = json.loads(project_data)
+        if not isinstance(parsed_project_data, dict):
+            raise ValueError("project_data must deserialize to a JSON object")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid project_data payload: {exc}") from exc
+
+    current_extracted: Dict[str, Any] = {}
+    target_extracted: Dict[str, Any] = {}
+
+    if current_architecture_image and current_architecture_image.filename:
+        try:
+            current_uri = await safe_process_diagram(current_architecture_image)
+            current_extracted = architecture_vision_agent.extract_architecture_from_image(current_uri, "current")
+        except Exception as exc:
+            logger.warning("Current architecture image parsing failed: %s", exc)
+
+    if target_architecture_image and target_architecture_image.filename:
+        try:
+            target_uri = await safe_process_diagram(target_architecture_image)
+            target_extracted = architecture_vision_agent.extract_architecture_from_image(target_uri, "target")
+        except Exception as exc:
+            logger.warning("Target architecture image parsing failed: %s", exc)
+
+    architecture_context = architecture_context_builder.build(
+        project_data=parsed_project_data,
+        current_architecture_extracted=current_extracted,
+        target_architecture_extracted=target_extracted,
+    )
+
+    architecture_sections = [
+        "CURRENT STATE ARCHITECTURE",
+        "FUTURE STATE ARCHITECTURE",
+        "IMPLEMENTATION DETAILS",
+        "ARCHITECTURE DEPLOYMENT OVERVIEW",
+        "CURRENTLY USED TECHNOLOGY STACK",
+        "OCI SERVICE SIZING",
+    ]
+
+    generated_sections: Dict[str, str] = {}
+    guardrail_findings: Dict[str, Any] = {}
+
+    for section_name in architecture_sections:
+        rag_context = section_writer.retrieve_rag_context(section_name, parsed_project_data)
+        section_text = section_writer.write_section(
+            section_name=section_name,
+            project_data=parsed_project_data,
+            architecture_context=architecture_context,
+            rag_context=rag_context,
+            llm_provider=llm_provider,
+        )
+        generated_sections[section_name] = section_text
+        issues = ArchitectureGuardrails.validate(section_name, section_text, architecture_context)
+        if issues:
+            guardrail_findings[section_name] = issues
+
+    markdown = "\n\n".join([f"## {name}\n{body}" for name, body in generated_sections.items()])
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "sections": generated_sections,
+            "document_markdown": markdown,
+            "architecture_extracted": {
+                "current": current_extracted,
+                "target": target_extracted,
+            },
+            "architecture_context": architecture_context,
+            "guardrail_findings": guardrail_findings,
+        }
+    )
 
 
 @app.post("/chat-rag/", response_model=RAGChatResponse)
