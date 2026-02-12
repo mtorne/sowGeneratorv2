@@ -17,11 +17,9 @@ from oci.generative_ai_inference.models import (
     TextContent,
 )
 
+from app.config.settings import OCISettings
+
 logger = logging.getLogger(__name__)
-
-
-class LLMConfigurationError(RuntimeError):
-    """Raised when required OCI Generative AI configuration is missing."""
 
 
 @dataclass(frozen=True)
@@ -40,33 +38,16 @@ class LLMConfig:
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Build config from environment variables."""
-        endpoint = os.getenv("OCI_GENAI_ENDPOINT") or os.getenv("OCI_ENDPOINT")
-        model_id = os.getenv("OCI_MODEL_ID")
-        compartment_id = os.getenv("OCI_COMPARTMENT_ID")
-
-        missing_vars: list[str] = []
-        if not endpoint:
-            missing_vars.append("OCI_GENAI_ENDPOINT")
-        if not model_id:
-            missing_vars.append("OCI_MODEL_ID")
-        if not compartment_id:
-            missing_vars.append("OCI_COMPARTMENT_ID")
-
-        if missing_vars:
-            missing = ", ".join(missing_vars)
-            raise LLMConfigurationError(
-                f"Missing required OCI environment variables: {missing}"
-            )
-
+        oci_settings = OCISettings.from_env()
         return cls(
-            config_file=os.getenv("OCI_CONFIG_FILE", os.path.expanduser("~/.oci/config")),
-            profile=os.getenv("OCI_PROFILE", "DEFAULT"),
-            endpoint=endpoint,
-            model_id=model_id,
-            compartment_id=compartment_id,
-            temperature=float(os.getenv("OCI_TEMPERATURE", "0.2")),
-            timeout_connect=float(os.getenv("OCI_TIMEOUT_CONNECT", "10")),
-            timeout_read=float(os.getenv("OCI_TIMEOUT_READ", "120")),
+            config_file=oci_settings.config_file,
+            profile=oci_settings.profile,
+            endpoint=oci_settings.endpoint,
+            model_id=oci_settings.model_id,
+            compartment_id=oci_settings.compartment_id,
+            temperature=oci_settings.temperature,
+            timeout_connect=oci_settings.timeout_connect,
+            timeout_read=oci_settings.timeout_read,
         )
 
 
@@ -129,9 +110,6 @@ def call_llm(system_prompt: str, user_prompt: str) -> str:
         logger.info("Calling OCI Generative AI model")
         response = client.chat(details)
         return _extract_text(response)
-    except LLMConfigurationError:
-        logger.exception("Missing required OCI environment variables")
-        raise
     except oci.exceptions.ServiceError as exc:
         logger.exception("OCI service error")
         raise RuntimeError(f"OCI service error: {exc.message}") from exc

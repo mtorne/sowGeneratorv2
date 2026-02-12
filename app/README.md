@@ -10,14 +10,22 @@ pip install -r app/requirements.txt
 
 ## Environment Variables
 
-Set the following variables before running with OCI:
+The app now mirrors backend/composer OCI settings so both services can share the same environment.
+
+Primary variables:
 
 - `OCI_CONFIG_FILE`
 - `OCI_PROFILE`
-- `OCI_GENAI_ENDPOINT`
-- `OCI_MODEL_ID`
+- `OCI_GENAI_ENDPOINT` (or `OCI_ENDPOINT`)
+- `OCI_MODEL_ID` (or `OCI_MODEL_ID_LLAMA`)
 - `OCI_COMPARTMENT_ID`
 - `OCI_TEMPERATURE`
+
+Backend-compatible defaults (if not provided):
+
+- endpoint: `https://inference.generativeai.us-chicago-1.oci.oraclecloud.com`
+- model: `meta.llama-4-maverick-17b-128e-instruct-fp8`
+- compartment: backend default compartment id
 
 Optional:
 
