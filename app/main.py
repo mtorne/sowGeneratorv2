@@ -50,6 +50,24 @@ KNOWN_SERVICES = {
 }
 
 
+
+class ServiceValidationError(RuntimeError):
+    """Raised when generated output includes services outside explicit allow-list."""
+
+KNOWN_SERVICES = {
+    "oke",
+    "mysql",
+    "streaming",
+    "object storage",
+    "compute",
+    "load balancer",
+    "autonomous database",
+    "api gateway",
+    "vault",
+    "waf",
+}
+
+
 class SowInput(BaseModel):
     """Input payload for SoW generation."""
 
@@ -96,8 +114,16 @@ def _mentioned_services(text: str) -> set[str]:
     return {service for service in KNOWN_SERVICES if re.search(rf"\b{re.escape(service)}\b", lowered)}
 
 
+def _allowed_services(context: dict[str, Any]) -> set[str]:
+    """Normalize allowed services explicitly provided in request payload."""
+    return {s.casefold() for s in context.get("services", []) if isinstance(s, str) and s.strip()}
+
+
 def _disallowed_services(context: dict[str, Any]) -> list[str]:
-    allowed = {s.casefold() for s in context.get("services", []) if isinstance(s, str)}
+    """Return disallowed services only when caller explicitly supplies allowed services."""
+    allowed = _allowed_services(context)
+    if not allowed:
+        return []
     return sorted(service for service in KNOWN_SERVICES if service not in allowed)
 
 
@@ -143,10 +169,14 @@ def generate_sow(payload: SowInput) -> SowOutput:
                     rag_context=rag_context,
                     disallowed_services=disallowed,
                 )
-                mentioned = _mentioned_services(section_content)
-                invalid_services = [svc for svc in mentioned if svc in set(disallowed)]
-                if invalid_services:
-                    raise RuntimeError(f"Disallowed services in {section}: {', '.join(sorted(invalid_services))}")
+
+                if disallowed:
+                    mentioned = _mentioned_services(section_content)
+                    invalid_services = [svc for svc in mentioned if svc in set(disallowed)]
+                    if invalid_services:
+                        raise ServiceValidationError(
+                            f"Disallowed services in {section}: {', '.join(sorted(invalid_services))}"
+                        )
 
             drafted_sections.append((section, section_content))
 
@@ -157,6 +187,9 @@ def generate_sow(payload: SowInput) -> SowOutput:
         file_name = builder.build(full_document=reviewed, output_dir=project_root)
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name, markdown_file=markdown_name)
+    except ServiceValidationError as exc:
+        logger.warning("SoW generation failed validation: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("SoW generation failed")
         raise HTTPException(status_code=500, detail="Failed to generate SoW") from exc

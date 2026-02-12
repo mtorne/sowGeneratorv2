@@ -92,3 +92,49 @@ def test_cors_preflight_health() -> None:
     )
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "*"
+
+
+def test_generate_sow_allows_known_services_when_service_list_not_provided(monkeypatch) -> None:
+    """Guardrails should be skipped when request does not explicitly include services."""
+    dynamic_sections = 11
+    responses = iter(["Uses OKE, MySQL, and API Gateway."] * dynamic_sections + ["Reviewed full document."])
+
+    mock_call = lambda *_args, **_kwargs: next(responses)
+    monkeypatch.setattr("app.agents.writer.call_llm", mock_call)
+    monkeypatch.setattr("app.agents.qa.call_llm", mock_call)
+
+    client = TestClient(app)
+    payload = {
+        "client": "Cegid",
+        "project_name": "xrp Modernization",
+        "cloud": "OCI",
+        "scope": "Refactor monolith to microservices",
+        "duration": "4 months",
+    }
+
+    response = client.post("/generate-sow", json=payload)
+    assert response.status_code == 200
+
+
+def test_generate_sow_rejects_disallowed_services_when_service_list_is_explicit(monkeypatch) -> None:
+    """Guardrails should reject generated services not present in explicit request services list."""
+    dynamic_sections = 11
+    responses = iter(["Uses OKE and Streaming."] * dynamic_sections + ["Reviewed full document."])
+
+    mock_call = lambda *_args, **_kwargs: next(responses)
+    monkeypatch.setattr("app.agents.writer.call_llm", mock_call)
+    monkeypatch.setattr("app.agents.qa.call_llm", mock_call)
+
+    client = TestClient(app)
+    payload = {
+        "client": "Cegid",
+        "project_name": "xrp Modernization",
+        "cloud": "OCI",
+        "scope": "Refactor monolith to microservices",
+        "duration": "4 months",
+        "services": ["OKE"],
+    }
+
+    response = client.post("/generate-sow", json=payload)
+    assert response.status_code == 422
+    assert "Disallowed services in" in response.json()["detail"]
