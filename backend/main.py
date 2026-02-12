@@ -128,8 +128,8 @@ def _case_response(sow_case):
 
 
 def _sanitize_for_json(value: Any) -> Any:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (bytes, bytearray)):
+        return f"<binary data, {len(value)} bytes>"
     if isinstance(value, dict):
         return {str(k): _sanitize_for_json(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
@@ -140,10 +140,15 @@ def _sanitize_for_json(value: Any) -> Any:
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.warning("Request validation failed on %s: %s", request.url.path, exc)
-    return JSONResponse(
-        status_code=422,
-        content={"detail": _sanitize_for_json(exc.errors())},
-    )
+    sanitized_errors = []
+    for raw_error in exc.errors():
+        error_item = dict(raw_error)
+        if "input" in error_item:
+            error_item["input"] = _sanitize_for_json(error_item.get("input"))
+        if "ctx" in error_item:
+            error_item["ctx"] = _sanitize_for_json(error_item.get("ctx"))
+        sanitized_errors.append(_sanitize_for_json(error_item))
+    return JSONResponse(status_code=422, content={"detail": sanitized_errors})
 
 # Default template with common placeholders
 DEFAULT_TEMPLATE = """
@@ -987,16 +992,18 @@ If your custom template fails, the system will use a default template with stand
 @app.post("/generate-sow")
 async def generate_sow(
     project_data: Optional[str] = Form(None, description="JSON payload for project context"),
+    projectData: Optional[str] = Form(None, description="Alias for project_data"),
     llm_provider: str = Form("meta.llama-3.1-70b-instruct"),
     current_architecture_image: UploadFile = File(None, description="Optional current architecture diagram"),
     target_architecture_image: UploadFile = File(None, description="Optional target architecture diagram"),
 ):
     """Generate deterministic SoW sections with optional multimodal architecture extraction."""
-    if project_data is None or not str(project_data).strip():
+    incoming_project_data = project_data if project_data is not None else projectData
+    if incoming_project_data is None or not str(incoming_project_data).strip():
         raise HTTPException(status_code=400, detail="project_data is required as multipart form field")
 
     try:
-        parsed_project_data = json.loads(project_data)
+        parsed_project_data = json.loads(incoming_project_data)
         if not isinstance(parsed_project_data, dict):
             raise ValueError("project_data must deserialize to a JSON object")
     except Exception as exc:
