@@ -964,12 +964,15 @@ If your custom template fails, the system will use a default template with stand
 
 @app.post("/generate-sow")
 async def generate_sow(
-    project_data: str = Form(..., description="JSON payload for project context"),
+    project_data: Optional[str] = Form(None, description="JSON payload for project context"),
     llm_provider: str = Form("meta.llama-3.1-70b-instruct"),
     current_architecture_image: UploadFile = File(None, description="Optional current architecture diagram"),
     target_architecture_image: UploadFile = File(None, description="Optional target architecture diagram"),
 ):
     """Generate deterministic SoW sections with optional multimodal architecture extraction."""
+    if project_data is None or not str(project_data).strip():
+        raise HTTPException(status_code=400, detail="project_data is required as multipart form field")
+
     try:
         parsed_project_data = json.loads(project_data)
         if not isinstance(parsed_project_data, dict):
