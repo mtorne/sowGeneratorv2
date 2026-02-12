@@ -150,6 +150,40 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
         sanitized_errors.append(_sanitize_for_json(error_item))
     return JSONResponse(status_code=422, content={"detail": sanitized_errors})
 
+
+
+def _inject_architecture_evidence_if_missing(section_name: str, section_text: str, architecture_context: Dict[str, Any]) -> str:
+    text = section_text or ""
+    upper = section_name.upper()
+
+    def collect_names(state_key: str, category: str) -> list[str]:
+        state = architecture_context.get(state_key, {})
+        items = state.get(category, []) if isinstance(state, dict) else []
+        out = []
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and item.get("name"):
+                    out.append(str(item.get("name")))
+        return out
+
+    if "CURRENT STATE" in upper:
+        must_include = collect_names("current_state", "compute")[:3] + collect_names("current_state", "databases")[:3]
+    elif "FUTURE STATE" in upper:
+        must_include = collect_names("target_state", "compute")[:3] + collect_names("target_state", "databases")[:3]
+    elif "TECHNOLOGY STACK" in upper:
+        stack = architecture_context.get("technology_stack", {})
+        must_include = (stack.get("infrastructure", []) if isinstance(stack, dict) else [])[:3] + (stack.get("database", []) if isinstance(stack, dict) else [])[:3]
+    else:
+        must_include = collect_names("target_state", "compute")[:3]
+
+    missing = [name for name in must_include if isinstance(name, str) and name and name.lower() not in text.lower()]
+    if not missing:
+        return text
+
+    evidence = "\n\nEvidence from extracted diagrams: " + ", ".join(missing)
+    return text + evidence
+
+
 # Default template with common placeholders
 DEFAULT_TEMPLATE = """
 
@@ -1053,6 +1087,7 @@ async def generate_sow(
             rag_context=rag_context,
             llm_provider=llm_provider,
         )
+        section_text = _inject_architecture_evidence_if_missing(section_name, section_text, architecture_context)
         generated_sections[section_name] = section_text
         issues = ArchitectureGuardrails.validate(section_name, section_text, architecture_context)
         if issues:
