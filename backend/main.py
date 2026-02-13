@@ -184,6 +184,41 @@ def _inject_architecture_evidence_if_missing(section_name: str, section_text: st
     return text + evidence
 
 
+def _micro_correct_section(
+    section_name: str,
+    section_text: str,
+    issues: list[str],
+    architecture_context: Dict[str, Any],
+    llm_provider: str,
+) -> str:
+    if not issues:
+        return section_text
+    prompt = (
+        "You are a document correction agent. "
+        "Fix only inconsistent statements in the paragraph. "
+        "Do not rewrite full section. Preserve enterprise tone and structure.\n"
+        f"Section: {section_name}\n"
+        f"Issues: {json.dumps(issues)}\n"
+        f"Architecture Context: {json.dumps(architecture_context)}\n"
+        f"Original Section Text:\n{section_text}"
+    )
+    return section_writer.oci_service.generate_text_content(prompt=prompt, provider="generic", model_id=llm_provider)
+
+
+def _qa_refine_document(sections: Dict[str, str], llm_provider: str) -> Dict[str, str]:
+    refined: Dict[str, str] = {}
+    for name, text in sections.items():
+        prompt = (
+            "You are a QA Agent for enterprise SoW documents. "
+            "Only fix contradictions, improve clarity, remove duplication, and ensure enterprise tone. "
+            "Do not change structure. Do not add new sections.\n"
+            f"Section Name: {name}\n"
+            f"Section Text:\n{text}"
+        )
+        refined[name] = section_writer.oci_service.generate_text_content(prompt=prompt, provider="generic", model_id=llm_provider)
+    return refined
+
+
 # Default template with common placeholders
 DEFAULT_TEMPLATE = """
 
@@ -1079,7 +1114,13 @@ async def generate_sow(
     guardrail_findings: Dict[str, Any] = {}
 
     for section_name in architecture_sections:
-        rag_context = section_writer.retrieve_rag_context(section_name, parsed_project_data)
+        rag_context = section_writer.retrieve_rag_context(section_name, parsed_project_data, architecture_context)
+        logger.info(
+            "RAG section=%s chunk_count=%s strategy=%s",
+            section_name,
+            rag_context.get("chunk_count"),
+            rag_context.get("strategy"),
+        )
         section_text = section_writer.write_section(
             section_name=section_name,
             project_data=parsed_project_data,
@@ -1088,10 +1129,23 @@ async def generate_sow(
             llm_provider=llm_provider,
         )
         section_text = _inject_architecture_evidence_if_missing(section_name, section_text, architecture_context)
-        generated_sections[section_name] = section_text
         issues = ArchitectureGuardrails.validate(section_name, section_text, architecture_context)
         if issues:
+            section_text = _micro_correct_section(
+                section_name=section_name,
+                section_text=section_text,
+                issues=issues,
+                architecture_context=architecture_context,
+                llm_provider=llm_provider,
+            )
+        generated_sections[section_name] = section_text
+        if issues:
             guardrail_findings[section_name] = issues
+
+    document_consistency = ArchitectureGuardrails.validate_document_consistency(generated_sections, architecture_context)
+    if document_consistency:
+        logger.warning("Validation inconsistencies found: %s", document_consistency)
+    generated_sections = _qa_refine_document(generated_sections, llm_provider)
 
     markdown = "\n\n".join([f"## {name}\n{body}" for name, body in generated_sections.items()])
 
@@ -1106,6 +1160,7 @@ async def generate_sow(
             },
             "architecture_context": architecture_context,
             "guardrail_findings": guardrail_findings,
+            "document_consistency": document_consistency,
         }
     )
 

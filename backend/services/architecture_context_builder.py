@@ -8,12 +8,15 @@ class ArchitectureContextBuilder:
 
     COMPONENT_KEYS = [
         "compute",
-        "networking",
+        "kubernetes",
         "databases",
+        "networking",
         "load_balancers",
-        "security_components",
+        "security",
         "storage",
-        "integration_components",
+        "streaming",
+        "on_prem_connectivity",
+        "high_availability_pattern",
     ]
 
     def build(
@@ -24,14 +27,15 @@ class ArchitectureContextBuilder:
     ) -> Dict[str, Any]:
         current = self._normalize_extraction(current_architecture_extracted or {})
         target = self._normalize_extraction(target_architecture_extracted or {})
-
-        inconsistencies = self._detect_inconsistencies(current, target)
+        cross_validation = self._cross_validate_with_project_data(project_data, current, target)
+        inconsistencies = self._detect_inconsistencies(current, target, cross_validation)
 
         return {
             "project_data": project_data,
             "current_state": current,
             "target_state": target,
             "technology_stack": self._build_technology_stack(project_data, current, target),
+            "cross_validation": cross_validation,
             "inconsistencies": inconsistencies,
         }
 
@@ -40,13 +44,8 @@ class ArchitectureContextBuilder:
         for key in self.COMPONENT_KEYS:
             items = extracted.get(key) if isinstance(extracted.get(key), list) else []
             normalized[key] = self._dedupe_components(items)
-
-        k8s = extracted.get("kubernetes") if isinstance(extracted.get("kubernetes"), dict) else {}
-        normalized["kubernetes"] = {
-            "present": bool(k8s.get("present", False)),
-            "components": self._dedupe_components(k8s.get("components") or []),
-            "confidence": str(k8s.get("confidence") or "low").lower(),
-        }
+        normalized["relationships"] = extracted.get("relationships") if isinstance(extracted.get("relationships"), list) else []
+        normalized["confidence_scores"] = extracted.get("confidence_scores") if isinstance(extracted.get("confidence_scores"), list) else []
         return normalized
 
     def _dedupe_components(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -55,28 +54,53 @@ class ArchitectureContextBuilder:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or "Unknown").strip()
-            category = str(item.get("category") or "unknown").strip()
-            key = (name.lower(), category.lower())
+            label = str(item.get("label") or "").strip()
+            key = (name.lower(), label.lower())
             if key not in deduped:
                 deduped[key] = {
                     "name": name,
-                    "category": category,
-                    "platform": str(item.get("platform") or "unknown").strip(),
-                    "topology": str(item.get("topology") or "unknown").strip(),
+                    "label": label,
+                    "details": str(item.get("details") or "").strip(),
                     "confidence": str(item.get("confidence") or "low").lower(),
-                    "notes": str(item.get("notes") or "").strip(),
                 }
         return list(deduped.values())
 
-    def _detect_inconsistencies(self, current: Dict[str, Any], target: Dict[str, Any]) -> List[str]:
+    def _cross_validate_with_project_data(self, project_data: Dict[str, Any], current: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
+        validations: Dict[str, Any] = {
+            "mismatches": [],
+            "unconfirmed": [],
+            "enforcements": [],
+        }
+        stated_database = str(project_data.get("database") or project_data.get("db") or "").lower()
+        diagram_databases = {item.get("name", "").lower() for item in current.get("databases", []) + target.get("databases", [])}
+
+        if stated_database and diagram_databases and stated_database not in diagram_databases:
+            validations["mismatches"].append(
+                f"project_data database '{stated_database}' does not match diagram database {sorted(diagram_databases)}"
+            )
+
+        project_data_text = str(project_data).lower()
+        diagram_streaming = [item.get("name") for item in current.get("streaming", []) + target.get("streaming", []) if item.get("name")]
+        for stream in diagram_streaming:
+            if str(stream).lower() not in project_data_text:
+                validations["unconfirmed"].append(f"diagram shows streaming component '{stream}' not declared in project_data")
+
+        on_prem_present = bool(current.get("on_prem_connectivity") or target.get("on_prem_connectivity"))
+        if on_prem_present:
+            validations["enforcements"].append("on-prem connectivity detected; enforce DRG/VPN mention in architecture sections")
+
+        return validations
+
+    def _detect_inconsistencies(self, current: Dict[str, Any], target: Dict[str, Any], cross_validation: Dict[str, Any]) -> List[str]:
         current_db = {c["name"].lower() for c in current.get("databases", [])}
         target_db = {c["name"].lower() for c in target.get("databases", [])}
         issues: List[str] = []
 
         if "mysql" in current_db and "postgresql" in target_db and "mysql" not in target_db:
             issues.append("Target introduces PostgreSQL while current uses MySQL; validate migration intent.")
-        if current.get("kubernetes", {}).get("present") and not target.get("kubernetes", {}).get("present"):
-            issues.append("Current architecture indicates Kubernetes but target does not.")
+
+        issues.extend(cross_validation.get("mismatches", []))
+        issues.extend(cross_validation.get("unconfirmed", []))
         return issues
 
     def _build_technology_stack(
@@ -102,11 +126,11 @@ class ArchitectureContextBuilder:
             if comp["name"] not in stack["infrastructure"]:
                 stack["infrastructure"].append(comp["name"])
 
-        for comp in current.get("security_components", []) + target.get("security_components", []):
+        for comp in current.get("security", []) + target.get("security", []):
             if comp["name"] not in stack["security"]:
                 stack["security"].append(comp["name"])
 
-        for comp in current.get("integration_components", []) + target.get("integration_components", []):
+        for comp in current.get("streaming", []) + target.get("streaming", []):
             if comp["name"] not in stack["integration"]:
                 stack["integration"].append(comp["name"])
 
