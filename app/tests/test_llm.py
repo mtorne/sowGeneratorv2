@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.services.llm import LLMConfig
+from app.config.settings import OCISettings
 
 
 def test_llm_config_accepts_oci_endpoint_alias(monkeypatch) -> None:
@@ -38,3 +39,11 @@ def test_llm_config_prefers_oci_model_id_llama_alias(monkeypatch) -> None:
     config = LLMConfig.from_env()
 
     assert config.model_id == "meta.llama-custom"
+
+
+def test_oci_settings_defaults_multimodal_model_to_gemini_pro(monkeypatch) -> None:
+    monkeypatch.delenv("OCI_MM_MODEL_NAME", raising=False)
+
+    settings = OCISettings.from_env()
+
+    assert settings.multimodal_model_name == "google.gemini-1.5-pro-002"
