@@ -138,3 +138,35 @@ def test_generate_sow_rejects_disallowed_services_when_service_list_is_explicit(
     response = client.post("/generate-sow", json=payload)
     assert response.status_code == 422
     assert "Disallowed services in" in response.json()["detail"]
+
+
+def test_inject_diagram_analysis_context_includes_confidence() -> None:
+    from app.main import _inject_diagram_analysis_context
+
+    section_content = "Base architecture narrative."
+    context = {
+        "architecture_analysis": {
+            "current": {
+                "file_name": "current-oke.png",
+                "format": "png",
+                "size_bytes": 1234,
+                "inferred_components": ["OKE"],
+                "analysis_confidence": "medium",
+            }
+        }
+    }
+
+    updated = _inject_diagram_analysis_context("CURRENT STATE ARCHITECTURE", section_content, context)
+
+    assert "Diagram analysis evidence:" in updated
+    assert "Current diagram analysis confidence: medium." in updated
+
+
+def test_architecture_vision_agent_handles_empty_diagram() -> None:
+    from app.agents.architecture_vision import ArchitectureVisionAgent
+
+    analysis = ArchitectureVisionAgent().analyze(file_name="Picture1.png", content=b"", diagram_role="current")
+
+    assert analysis["size_bytes"] == 0
+    assert analysis["analysis_confidence"] == "low"
+    assert analysis["format"] == "unknown"

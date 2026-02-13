@@ -5,9 +5,7 @@ from __future__ import annotations
 import logging
 import json
 import os
-import imghdr
 import re
-import json
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from app.agents.architecture_vision import ArchitectureVisionAgent
 from app.agents.qa import QAAgent
 from app.agents.structure_controller import StructureController
 from app.agents.writer import WriterAgent
@@ -57,19 +56,6 @@ KNOWN_SERVICES = {
 
 class ServiceValidationError(RuntimeError):
     """Raised when generated output includes services outside explicit allow-list."""
-
-KNOWN_SERVICES = {
-    "oke",
-    "mysql",
-    "streaming",
-    "object storage",
-    "compute",
-    "load balancer",
-    "autonomous database",
-    "api gateway",
-    "vault",
-    "waf",
-}
 
 
 class SowInput(BaseModel):
@@ -180,34 +166,6 @@ def download_generated_file(file_name: str) -> FileResponse:
 
 
 
-def _analyze_uploaded_image(file_name: str, content: bytes, diagram_role: str) -> dict[str, Any]:
-    fmt = (imghdr.what(None, h=content) or "unknown").lower()
-    analysis = {
-        "diagram_role": diagram_role,
-        "file_name": file_name,
-        "format": fmt,
-        "size_bytes": len(content),
-    }
-
-    lower_name = (file_name or "").lower()
-    inferred_components: list[str] = []
-    for token, label in [
-        ("oke", "OKE"),
-        ("k8s", "Kubernetes"),
-        ("kubernetes", "Kubernetes"),
-        ("mysql", "MySQL"),
-        ("postgres", "PostgreSQL"),
-        ("lb", "Load Balancer"),
-        ("drg", "DRG"),
-        ("vpn", "VPN"),
-    ]:
-        if token in lower_name and label not in inferred_components:
-            inferred_components.append(label)
-
-    analysis["inferred_components"] = inferred_components
-    return analysis
-
-
 def _inject_diagram_analysis_context(section: str, section_content: str, context: dict[str, Any]) -> str:
     architecture = context.get("architecture_analysis") if isinstance(context.get("architecture_analysis"), dict) else {}
     current = architecture.get("current") if isinstance(architecture.get("current"), dict) else None
@@ -222,6 +180,9 @@ def _inject_diagram_analysis_context(section: str, section_content: str, context
         components = current.get("inferred_components") or []
         if components:
             notes.append(f"Current diagram inferred components: {', '.join(components)}.")
+        notes.append(
+            f"Current diagram analysis confidence: {current.get('analysis_confidence', 'low')}."
+        )
     if "FUTURE STATE ARCHITECTURE" in upper and target:
         notes.append(
             f"Target diagram analyzed: file={target.get('file_name')}, format={target.get('format')}, size={target.get('size_bytes')} bytes."
@@ -229,10 +190,14 @@ def _inject_diagram_analysis_context(section: str, section_content: str, context
         components = target.get("inferred_components") or []
         if components:
             notes.append(f"Target diagram inferred components: {', '.join(components)}.")
+        notes.append(
+            f"Target diagram analysis confidence: {target.get('analysis_confidence', 'low')}."
+        )
 
     if not notes:
         return section_content
     return section_content.rstrip() + "\n\nDiagram analysis evidence:\n- " + "\n- ".join(notes)
+
 
 @app.post("/generate-sow", response_model=SowOutput)
 async def generate_sow(
@@ -242,26 +207,10 @@ async def generate_sow(
     target_architecture_image: UploadFile | None = File(None),
 ) -> SowOutput:
     """Generate SoW DOCX and Markdown files using deterministic section orchestration."""
-    
-    # Parse the JSON string from the form field
-    try:
-        payload_dict = json.loads(project_data)
-        payload = SowInput(**payload_dict)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid project_data JSON: {exc}") from exc
-    
-    # Process uploaded images if needed
-    if current_architecture_image:
-        current_contents = await current_architecture_image.read()
-        logger.info(f"Received current architecture image: {current_architecture_image.filename}, {len(current_contents)} bytes")
-        # Store or process the image...
-    
-    if target_architecture_image:
-        target_contents = await target_architecture_image.read()
-        logger.info(f"Received target architecture image: {target_architecture_image.filename}, {len(target_contents)} bytes")
 
     writer = WriterAgent()
     qa = QAAgent()
+    architecture_vision = ArchitectureVisionAgent()
 
     try:
         content_type = (request.headers.get("content-type") or "").lower()
@@ -282,25 +231,32 @@ async def generate_sow(
         architecture_analysis: dict[str, Any] = {}
         if current_architecture_image and current_architecture_image.filename:
             current_bytes = await current_architecture_image.read()
-            architecture_analysis["current"] = _analyze_uploaded_image(current_architecture_image.filename, current_bytes, "current")
+            logger.info("Swarm flow step: ArchitectureVisionAgent (current)")
+            architecture_analysis["current"] = architecture_vision.analyze(current_architecture_image.filename, current_bytes, "current")
             await current_architecture_image.seek(0)
         if target_architecture_image and target_architecture_image.filename:
             target_bytes = await target_architecture_image.read()
-            architecture_analysis["target"] = _analyze_uploaded_image(target_architecture_image.filename, target_bytes, "target")
+            logger.info("Swarm flow step: ArchitectureVisionAgent (target)")
+            architecture_analysis["target"] = architecture_vision.analyze(target_architecture_image.filename, target_bytes, "target")
             await target_architecture_image.seek(0)
         if architecture_analysis:
             context["architecture_analysis"] = architecture_analysis
+
+        logger.info("Swarm flow step: ArchitectureContextBuilder")
 
         project_root = Path(__file__).resolve().parent
         structure = StructureController(template_root=project_root / "templates")
         rag_service = SectionAwareRAGService.from_env()
 
+        logger.info("Swarm flow step: StructureController")
         drafted_sections: list[tuple[str, str]] = []
         for section in structure.sections():
             if structure.is_static(section):
+                logger.info("Swarm flow step: section=%s static template injection", section)
                 section_content = structure.inject_template(section)
             else:
                 rag_context = rag_service.retrieve_section_context(section=section, project_data=context)
+                logger.info("Swarm flow step: section=%s retrieve_by_section returned %d chunks", section, len(rag_context))
                 disallowed = _disallowed_services(context)
                 section_content = writer.write_section(
                     section_name=section,
@@ -321,8 +277,10 @@ async def generate_sow(
             drafted_sections.append((section, section_content))
 
         assembled = _assemble_document(drafted_sections)
+        logger.info("Swarm flow step: QAAgent (light validation)")
         reviewed = qa.review_document(assembled)
 
+        logger.info("Swarm flow step: DocBuilder")
         builder = DocumentBuilder(template_path=project_root / "templates" / "sow_template.docx")
         file_name = builder.build(full_document=reviewed, output_dir=project_root)
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
