@@ -20,6 +20,7 @@ from app.agents.qa import QAAgent
 from app.agents.structure_controller import StructureController
 from app.agents.writer import WriterAgent
 from app.services.doc_builder import DocumentBuilder
+from app.services.oci_multimodal import OCIClient
 from app.services.rag_service import SectionAwareRAGService
 
 logging.basicConfig(
@@ -75,6 +76,14 @@ class SowOutput(BaseModel):
 
     file: str
     markdown_file: str
+
+
+def _build_multimodal_client() -> OCIClient | None:
+    try:
+        return OCIClient()
+    except Exception:
+        logger.exception("Failed to initialize OCI multimodal client")
+        return None
 
 
 def _assemble_document(sections: list[tuple[str, str]]) -> str:
@@ -210,7 +219,7 @@ async def generate_sow(
 
     writer = WriterAgent()
     qa = QAAgent()
-    architecture_vision = ArchitectureVisionAgent()
+    architecture_vision = ArchitectureVisionAgent(llm_client=_build_multimodal_client())
 
     try:
         content_type = (request.headers.get("content-type") or "").lower()
