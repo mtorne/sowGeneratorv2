@@ -18,6 +18,7 @@ class OCISettings:
     temperature: float
     timeout_connect: float
     timeout_read: float
+    multimodal_model_name: str
 
     @classmethod
     def from_env(cls) -> "OCISettings":
@@ -46,4 +47,5 @@ class OCISettings:
             temperature=float(os.getenv("OCI_TEMPERATURE", "0.2")),
             timeout_connect=float(os.getenv("OCI_TIMEOUT_CONNECT", "10")),
             timeout_read=float(os.getenv("OCI_TIMEOUT_READ", "120")),
+            multimodal_model_name=os.getenv("OCI_MM_MODEL_NAME", "google.gemini-2.5-pro"),
         )
