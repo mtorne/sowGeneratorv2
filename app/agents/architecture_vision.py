@@ -306,13 +306,19 @@ class ArchitectureVisionAgent:
         if balanced:
             candidates.append(balanced)
 
-        for candidate in candidates:
+        for idx, candidate in enumerate(candidates, start=1):
             try:
                 parsed = json.loads(candidate)
                 if isinstance(parsed, dict):
                     return parsed
-            except json.JSONDecodeError:
-                logger.exception("architecture_vision.json_decode_error")
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "architecture_vision.json_decode_error candidate_index=%s message=%s",
+                    idx,
+                    exc.msg,
+                )
+        if candidates:
+            logger.error("architecture_vision.json_parse_failed candidate_count=%s", len(candidates))
         return None
 
     @staticmethod
