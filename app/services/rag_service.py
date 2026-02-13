@@ -229,11 +229,11 @@ class SectionAwareRAGService:
         chat_details = ChatDetails(
             user_message=f"Retrieve {top_k} relevant documents about: {query}",
             should_stream=False,
+            session_id=self.session_id,
         )
 
         return self.runtime_client.chat(
             agent_endpoint_id=self.agent_endpoint_id,
-            session_id=self.session_id,
             chat_details=chat_details,
         )
 
@@ -245,12 +245,22 @@ class SectionAwareRAGService:
             return []
 
         message = data.message
+        content = getattr(message, "content", None)
+
+        if content and hasattr(content, "citations") and content.citations:
+            return list(content.citations)
 
         if hasattr(message, "citations") and message.citations:
             return list(message.citations)
 
-        if hasattr(message, "content") and message.content:
-            return [{"text": message.content, "metadata": {}}]
+        if content:
+            text = getattr(content, "text", None)
+            if text:
+                return [{"text": text, "metadata": {}}]
+            return [{"text": str(content), "metadata": {}}]
+
+        if hasattr(message, "text") and message.text:
+            return [{"text": str(message.text), "metadata": {}}]
 
         return []
 
@@ -266,7 +276,10 @@ class SectionAwareRAGService:
             return str(doc.text)
 
         if hasattr(doc, "content"):
-            return str(doc.content)
+            content = doc.content
+            if hasattr(content, "text") and content.text:
+                return str(content.text)
+            return str(content)
 
         return str(doc)
 
