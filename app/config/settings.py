@@ -47,5 +47,5 @@ class OCISettings:
             temperature=float(os.getenv("OCI_TEMPERATURE", "0.2")),
             timeout_connect=float(os.getenv("OCI_TIMEOUT_CONNECT", "10")),
             timeout_read=float(os.getenv("OCI_TIMEOUT_READ", "120")),
-            multimodal_model_name=os.getenv("OCI_MM_MODEL_NAME", "google.gemini-1.5-pro-002"),
+            multimodal_model_name=os.getenv("OCI_MM_MODEL_NAME", "google.gemini-2.5-pro"),
         )
