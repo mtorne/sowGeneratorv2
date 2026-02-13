@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import mimetypes
@@ -293,29 +294,40 @@ class ArchitectureVisionAgent:
     @staticmethod
     def _safe_parse_json(response_text: str) -> dict[str, Any] | None:
         text = (response_text or "").strip()
-        candidates: list[str] = []
+        candidates: list[tuple[str, str]] = []
 
         if text:
-            candidates.append(text)
+            candidates.append(("raw", text))
+        else:
+            logger.warning("architecture_vision.empty_llm_response")
 
         fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
         if fence_match:
-            candidates.append(fence_match.group(1).strip())
+            candidates.append(("fenced_json", fence_match.group(1).strip()))
 
         balanced = ArchitectureVisionAgent._extract_balanced_json_object(text)
         if balanced:
-            candidates.append(balanced)
+            candidates.append(("balanced_object", balanced))
 
-        for idx, candidate in enumerate(candidates, start=1):
+        for idx, (source, candidate) in enumerate(candidates, start=1):
             try:
                 parsed = json.loads(candidate)
                 if isinstance(parsed, dict):
                     return parsed
             except json.JSONDecodeError as exc:
+                preview = candidate[:180].replace("\n", "\\n")
+                fingerprint = hashlib.sha256(candidate.encode("utf-8", errors="ignore")).hexdigest()[:12]
                 logger.warning(
-                    "architecture_vision.json_decode_error candidate_index=%s message=%s",
+                    "architecture_vision.json_decode_error candidate_index=%s source=%s len=%s sha12=%s pos=%s line=%s col=%s message=%s preview=%s",
                     idx,
+                    source,
+                    len(candidate),
+                    fingerprint,
+                    exc.pos,
+                    exc.lineno,
+                    exc.colno,
                     exc.msg,
+                    preview,
                 )
         if candidates:
             logger.error("architecture_vision.json_parse_failed candidate_count=%s", len(candidates))
