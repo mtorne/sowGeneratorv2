@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -45,6 +46,7 @@ class SectionAwareRAGService:
         self.agent_endpoint_id = agent_endpoint_id
         self.knowledge_base_id = knowledge_base_id
         self.top_k = top_k
+        self.session_id: str | None = None
         self._cache: dict[str, list[SectionChunk]] = {}
 
         if runtime_client is not None:
@@ -103,7 +105,7 @@ class SectionAwareRAGService:
         return results
 
     def _retrieve_by_section(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:
-        """Retrieve chunks by calling OCI RAGA Search Documents API."""
+        """Retrieve chunks by calling OCI Agent Chat API."""
         logger.info("rag.retrieve_start section=%s", section)
 
         try:
@@ -116,7 +118,7 @@ class SectionAwareRAGService:
             query = self._build_semantic_query(section, project_data)
             logger.info("rag.query section=%s query=%s", section, query[:100])
 
-            response = self._search_documents(query=query, top_k=self.top_k * 2)
+            response = self._search_via_chat(query=query, top_k=self.top_k * 2)
             documents = self._extract_documents(response)
             if not documents:
                 logger.warning("rag.empty_response")
@@ -167,7 +169,7 @@ class SectionAwareRAGService:
             logger.exception("rag.count_knowledge_base_lookup_failed")
 
         try:
-            test_response = self._search_documents(query="test", top_k=1)
+            test_response = self._search_via_chat(query="test", top_k=1)
             docs = self._extract_documents(test_response)
             return 1 if docs else 0
         except Exception:
@@ -202,42 +204,70 @@ class SectionAwareRAGService:
         return self.count()
 
 
-    def _search_documents(self, query: str, top_k: int) -> Any:
-        """Invoke OCI search documents API (SDK method or raw REST fallback)."""
-        if hasattr(self.runtime_client, "search_documents"):
-            return self.runtime_client.search_documents(
-                agent_endpoint_id=self.agent_endpoint_id,
-                search_documents_details={"query": query, "top_k": top_k},
-            )
+    def _create_session(self) -> str:
+        """Create agent session for chat-based retrieval."""
+        from oci.generative_ai_agent_runtime.models import CreateSessionDetails
 
-        return self.runtime_client.base_client.call_api(
-            resource_path="/agentEndpoints/{agentEndpointId}/actions/searchDocuments",
-            method="POST",
-            path_params={"agentEndpointId": self.agent_endpoint_id},
-            body={"query": query, "top_k": top_k},
+        session_details = CreateSessionDetails(display_name=f"sow-rag-{int(time.time())}")
+
+        response = self.runtime_client.create_session(
+            agent_endpoint_id=self.agent_endpoint_id,
+            create_session_details=session_details,
+        )
+
+        self.session_id = response.data.id
+        logger.info("rag.session_created session_id=%s", self.session_id)
+        return self.session_id
+
+    def _search_via_chat(self, query: str, top_k: int) -> Any:
+        """Search using Chat API (required for tool-based RAG)."""
+        from oci.generative_ai_agent_runtime.models import ChatDetails
+
+        if not self.session_id:
+            self._create_session()
+
+        chat_details = ChatDetails(
+            user_message=f"Retrieve {top_k} relevant documents about: {query}",
+            should_stream=False,
+        )
+
+        return self.runtime_client.chat(
+            agent_endpoint_id=self.agent_endpoint_id,
+            session_id=self.session_id,
+            chat_details=chat_details,
         )
 
     def _extract_documents(self, response: Any) -> list[Any]:
-        """Extract documents list from OCI SDK or raw response payload."""
+        """Extract documents from Chat API response (includes citations)."""
         data = getattr(response, "data", None)
-        if hasattr(data, "documents") and getattr(data, "documents"):
-            return list(data.documents)
-        if isinstance(data, dict):
-            docs = data.get("documents") or data.get("items") or []
-            return list(docs) if isinstance(docs, list) else []
-        if isinstance(response, tuple) and len(response) >= 1 and isinstance(response[0], dict):
-            docs = response[0].get("documents") or []
-            return list(docs) if isinstance(docs, list) else []
+
+        if not data or not hasattr(data, "message"):
+            return []
+
+        message = data.message
+
+        if hasattr(message, "citations") and message.citations:
+            return list(message.citations)
+
+        if hasattr(message, "content") and message.content:
+            return [{"text": message.content, "metadata": {}}]
+
         return []
 
     def _extract_text(self, doc: Any) -> str:
-        """Extract text content from OCI document object."""
+        """Extract text from citation/document object."""
+        if hasattr(doc, "source_text"):
+            return str(doc.source_text)
+
         if isinstance(doc, dict):
-            return str(doc.get("text") or doc.get("content") or doc)
-        if hasattr(doc, "text") and getattr(doc, "text"):
+            return str(doc.get("text") or doc.get("content") or doc.get("source_text") or doc)
+
+        if hasattr(doc, "text"):
             return str(doc.text)
-        if hasattr(doc, "content") and getattr(doc, "content"):
+
+        if hasattr(doc, "content"):
             return str(doc.content)
+
         return str(doc)
 
     def _extract_section(self, doc: Any) -> str:
@@ -246,7 +276,12 @@ class SectionAwareRAGService:
         return str(value or "UNKNOWN")
 
     def _extract_metadata(self, doc: Any, key: str, default: Any = None) -> Any:
-        """Extract specific metadata field."""
+        """Extract metadata from citation/document."""
+        if hasattr(doc, "source_location"):
+            source_loc = doc.source_location
+            if hasattr(source_loc, "metadata") and isinstance(source_loc.metadata, dict):
+                return source_loc.metadata.get(key, default)
+
         if isinstance(doc, dict):
             metadata = doc.get("metadata")
             if isinstance(metadata, dict):
