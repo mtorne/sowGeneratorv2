@@ -86,10 +86,10 @@ class SectionAwareRAGService:
 
         return cls(
             oci_config=oci_config,
-            agent_endpoint_id=settings.rag_agent_endpoint_id,
-            knowledge_base_id=settings.rag_knowledge_base_id,
+            agent_endpoint_id=settings.agent_endpoint_id,
+            knowledge_base_id=settings.knowledge_base_id,
             top_k=settings.rag_top_k,
-            service_endpoint=settings.rag_agent_endpoint,
+            service_endpoint=settings.agent_endpoint,
         )
 
     def retrieve_section_context(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:
