@@ -54,7 +54,7 @@ class OCIClient:
             api_format=BaseChatRequest.API_FORMAT_GENERIC,
             temperature=0,
             top_p=0.9,
-            top_k=-1,
+            top_k=1,
             max_tokens=4000,
         )
         details = ChatDetails(
