@@ -54,3 +54,20 @@ def test_architecture_vision_agent_retries_on_low_confidence(monkeypatch) -> Non
     result = agent.analyze(file_name="arch.png", content=b"abc", diagram_role="target")
 
     assert result["analysis_confidence"]["overall_confidence"] == "high"
+
+
+def test_architecture_vision_agent_retries_when_first_response_is_invalid_json(monkeypatch) -> None:
+    valid_payload = {
+        "diagram_summary": {"diagram_type": "oci", "scope": "regional", "primary_intent": "ha"},
+        "components": {"compute": ["OKE"], "kubernetes": [], "databases": [], "networking": [], "load_balancers": [], "security": [], "storage": [], "streaming": [], "on_prem_connectivity": []},
+        "relationships": [],
+        "high_availability_pattern": {"multi_ad": True, "multi_region": False, "active_active": False, "active_passive": False, "dr_mechanism": ""},
+        "confidence_assessment": {"diagram_clarity": "high", "component_identification_confidence": "high", "overall_confidence": "high", "reason": "clear"},
+    }
+    agent = ArchitectureVisionAgent(llm_client=_MockMMClient(["{\"bad\":", json.dumps(valid_payload)]), low_confidence_retries=1)
+    monkeypatch.setattr(agent, "_read_image_metadata", lambda **_: _ImageMetadata(width=1200, height=800, fmt="png", mime_type="image/png"))
+
+    result = agent.analyze(file_name="arch.png", content=b"abc", diagram_role="target")
+
+    assert result["analysis_confidence"]["overall_confidence"] == "high"
+    assert result["architecture_extraction"]["components"]["compute"] == ["OKE"]

@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import mimetypes
+import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from io import BytesIO
@@ -168,7 +169,12 @@ class ArchitectureVisionAgent:
 
             structured_output = self._safe_parse_json(raw_response)
             if not structured_output:
-                logger.error("architecture_vision.invalid_json role=%s file=%s", diagram_role, file_name)
+                logger.error(
+                    "architecture_vision.invalid_json role=%s file=%s attempt=%s",
+                    diagram_role,
+                    file_name,
+                    attempt,
+                )
                 best_output = {
                     "confidence_assessment": {
                         "overall_confidence": "low",
@@ -176,6 +182,14 @@ class ArchitectureVisionAgent:
                     }
                 }
                 best_confidence = "low"
+                if attempt < attempts:
+                    logger.warning(
+                        "architecture_vision.retry_after_invalid_json role=%s file=%s next_attempt=%s",
+                        diagram_role,
+                        file_name,
+                        attempt + 1,
+                    )
+                    continue
                 break
 
             missing = sorted(self.EXPECTED_KEYS - set(structured_output.keys()))
@@ -279,17 +293,58 @@ class ArchitectureVisionAgent:
     @staticmethod
     def _safe_parse_json(response_text: str) -> dict[str, Any] | None:
         text = (response_text or "").strip()
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
+        candidates: list[str] = []
 
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            logger.exception("architecture_vision.json_decode_error")
+        if text:
+            candidates.append(text)
+
+        fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+        if fence_match:
+            candidates.append(fence_match.group(1).strip())
+
+        balanced = ArchitectureVisionAgent._extract_balanced_json_object(text)
+        if balanced:
+            candidates.append(balanced)
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                logger.exception("architecture_vision.json_decode_error")
+        return None
+
+    @staticmethod
+    def _extract_balanced_json_object(text: str) -> str | None:
+        start = text.find("{")
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : idx + 1]
+
         return None
 
     def _error_result(

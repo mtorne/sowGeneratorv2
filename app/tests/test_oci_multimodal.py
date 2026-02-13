@@ -38,7 +38,7 @@ def _settings() -> OCISettings:
         temperature=0.2,
         timeout_connect=10,
         timeout_read=120,
-        multimodal_model_name="google.gemini-1.5-pro-002",
+        multimodal_model_name="google.gemini-2.5-pro",
     )
 
 
@@ -52,7 +52,7 @@ def test_multimodal_completion_uses_valid_top_k_and_default_model() -> None:
 
     assert response == '{"ok": true}'
     assert fake_client.last_details.chat_request.top_k == 1
-    assert fake_client.last_details.serving_mode.model_id == "google.gemini-1.5-pro-002"
+    assert fake_client.last_details.serving_mode.model_id == "google.gemini-2.5-pro"
 
 
 def test_multimodal_completion_allows_model_override() -> None:

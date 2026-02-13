@@ -46,4 +46,4 @@ def test_oci_settings_defaults_multimodal_model_to_gemini_pro(monkeypatch) -> No
 
     settings = OCISettings.from_env()
 
-    assert settings.multimodal_model_name == "google.gemini-1.5-pro-002"
+    assert settings.multimodal_model_name == "google.gemini-2.5-pro"
