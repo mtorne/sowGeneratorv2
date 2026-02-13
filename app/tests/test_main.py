@@ -168,5 +168,6 @@ def test_architecture_vision_agent_handles_empty_diagram() -> None:
     analysis = ArchitectureVisionAgent().analyze(file_name="Picture1.png", content=b"", diagram_role="current")
 
     assert analysis["size_bytes"] == 0
-    assert analysis["analysis_confidence"] == "low"
+    assert analysis["analysis_confidence"]["overall_confidence"] == "low"
     assert analysis["format"] == "unknown"
+    assert analysis["architecture_extraction"]["error"]["code"] == "image_unreadable"
