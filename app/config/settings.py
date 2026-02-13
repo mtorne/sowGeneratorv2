@@ -19,6 +19,10 @@ class OCISettings:
     timeout_connect: float
     timeout_read: float
     multimodal_model_name: str
+    rag_agent_endpoint: str = "https://agent-runtime.generativeai.eu-frankfurt-1.oci.oraclecloud.com"
+    rag_agent_endpoint_id: str = ""
+    rag_knowledge_base_id: str = ""
+    rag_top_k: int = 5
 
     @classmethod
     def from_env(cls) -> "OCISettings":
@@ -48,4 +52,11 @@ class OCISettings:
             timeout_connect=float(os.getenv("OCI_TIMEOUT_CONNECT", "10")),
             timeout_read=float(os.getenv("OCI_TIMEOUT_READ", "120")),
             multimodal_model_name=os.getenv("OCI_MM_MODEL_NAME", "google.gemini-2.5-pro"),
+            rag_agent_endpoint=os.getenv(
+                "OCI_AGENT_ENDPOINT",
+                "https://agent-runtime.generativeai.eu-frankfurt-1.oci.oraclecloud.com",
+            ),
+            rag_agent_endpoint_id=os.getenv("OCI_RAGA_AGENT_ENDPOINT_ID", os.getenv("OCI_AGENT_ENDPOINT_ID", "")),
+            rag_knowledge_base_id=os.getenv("OCI_KNOWLEDGE_BASE_ID", ""),
+            rag_top_k=int(os.getenv("RAG_TOP_K", "5")),
         )

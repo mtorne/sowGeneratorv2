@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +11,8 @@ import oci
 from oci import retry
 from oci.generative_ai_agent import GenerativeAiAgentClient
 from oci.generative_ai_agent_runtime import GenerativeAiAgentRuntimeClient
+
+from app.config.settings import OCISettings
 
 
 logger = logging.getLogger(__name__)
@@ -54,8 +55,8 @@ class SectionAwareRAGService:
                 service_endpoint=service_endpoint,
                 retry_strategy=retry.NoneRetryStrategy(),
                 timeout=(
-                    int(os.getenv("OCI_TIMEOUT_CONNECT", "10")),
-                    int(os.getenv("OCI_TIMEOUT_READ", "240")),
+                    int(oci_config.get("timeout_connect", 10)) if isinstance(oci_config, dict) else 10,
+                    int(oci_config.get("timeout_read", 120)) if isinstance(oci_config, dict) else 120,
                 ),
             )
 
@@ -67,26 +68,28 @@ class SectionAwareRAGService:
 
     @classmethod
     def from_env(cls) -> "SectionAwareRAGService":
-        """Initialize from environment variables."""
-        config_path = os.getenv("OCI_CONFIG_FILE", "~/.oci/config")
-        config_profile = os.getenv("OCI_CONFIG_PROFILE", "DEFAULT")
+        """Initialize from OCI settings and env-backed credentials."""
+        settings = OCISettings.from_env()
 
         try:
             oci_config = oci.config.from_file(
-                file_location=os.path.expanduser(config_path),
-                profile_name=config_profile,
+                file_location=settings.config_file,
+                profile_name=settings.profile,
             )
         except Exception:
             logger.info("rag.using_instance_principal")
             signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
             oci_config = {"signer": signer}
 
+        oci_config["timeout_connect"] = settings.timeout_connect
+        oci_config["timeout_read"] = settings.timeout_read
+
         return cls(
             oci_config=oci_config,
-            agent_endpoint_id=os.environ["OCI_RAGA_AGENT_ENDPOINT_ID"],
-            knowledge_base_id=os.environ["OCI_KNOWLEDGE_BASE_ID"],
-            top_k=int(os.getenv("RAG_TOP_K", "5")),
-            service_endpoint=os.getenv("OCI_AGENT_ENDPOINT"),
+            agent_endpoint_id=settings.rag_agent_endpoint_id,
+            knowledge_base_id=settings.rag_knowledge_base_id,
+            top_k=settings.rag_top_k,
+            service_endpoint=settings.rag_agent_endpoint,
         )
 
     def retrieve_section_context(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:
