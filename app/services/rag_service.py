@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
 from dataclasses import dataclass
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
+
+import oci
+from oci import retry
+from oci.generative_ai_agent import GenerativeAiAgentClient
+from oci.generative_ai_agent_runtime import GenerativeAiAgentRuntimeClient
+
+from app.config.settings import OCISettings
 
 
 logger = logging.getLogger(__name__)
@@ -27,20 +30,67 @@ class SectionChunk:
 
 
 class SectionAwareRAGService:
-    """Per-request retriever with section filtering and caching."""
+    """RAG service that retrieves context using OCI Knowledge Base search."""
 
-    def __init__(self, chunks: list[SectionChunk], top_k: int = 3) -> None:
-        self._chunks = chunks
+    def __init__(
+        self,
+        oci_config: dict[str, Any] | None,
+        agent_endpoint_id: str,
+        knowledge_base_id: str,
+        top_k: int = 5,
+        service_endpoint: str | None = None,
+        runtime_client: Any | None = None,
+    ) -> None:
+        self._oci_config = oci_config or {}
+        self.agent_endpoint_id = agent_endpoint_id
+        self.knowledge_base_id = knowledge_base_id
         self.top_k = top_k
         self._cache: dict[str, list[SectionChunk]] = {}
 
+        if runtime_client is not None:
+            self.runtime_client = runtime_client
+        else:
+            self.runtime_client = GenerativeAiAgentRuntimeClient(
+                config=self._oci_config,
+                service_endpoint=service_endpoint,
+                retry_strategy=retry.NoneRetryStrategy(),
+                timeout=(
+                    int(oci_config.get("timeout_connect", 10)) if isinstance(oci_config, dict) else 10,
+                    int(oci_config.get("timeout_read", 120)) if isinstance(oci_config, dict) else 120,
+                ),
+            )
+
+        logger.info(
+            "rag.initialized agent_endpoint=%s kb=%s",
+            agent_endpoint_id[-20:],
+            knowledge_base_id[-20:],
+        )
+
     @classmethod
     def from_env(cls) -> "SectionAwareRAGService":
-        """Initialize service from env-configured chunk source."""
-        top_k = int(os.getenv("RAG_TOP_K", "3"))
-        chunks_path = os.getenv("RAG_CHUNKS_PATH", "")
-        chunks = _load_chunks(chunks_path) if chunks_path else []
-        return cls(chunks=chunks, top_k=top_k)
+        """Initialize from OCI settings and env-backed credentials."""
+        settings = OCISettings.from_env()
+
+        try:
+            oci_config = oci.config.from_file(
+                file_location=settings.config_file,
+                profile_name=settings.profile,
+            )
+        except Exception:
+            logger.info("rag.using_instance_principal")
+            signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
+            oci_config = {"signer": signer}
+
+        oci_config["timeout_connect"] = settings.timeout_connect
+        oci_config["timeout_read"] = settings.timeout_read
+
+        return cls(
+            oci_config=oci_config,
+            agent_endpoint_id=settings.agent_endpoint_id,
+            knowledge_base_id=settings.knowledge_base_id,
+            top_k=settings.rag_top_k,
+            service_endpoint=settings.agent_endpoint,
+        )
 
     def retrieve_section_context(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:
         """Retrieve top-k section-matched chunks with diagnostics and semantic fallback."""
@@ -52,25 +102,92 @@ class SectionAwareRAGService:
         self._cache[cache_key] = results
         return results
 
+    def _retrieve_by_section(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:
+        """Retrieve chunks by calling OCI RAGA Search Documents API."""
+        logger.info("rag.retrieve_start section=%s", section)
+
+        try:
+            doc_count = self.count()
+            logger.info("rag.vector_store_total_docs count=%s", doc_count)
+            if doc_count == 0:
+                logger.error("rag.empty_vector_store - NO DOCUMENTS INDEXED")
+                return []
+
+            query = self._build_semantic_query(section, project_data)
+            logger.info("rag.query section=%s query=%s", section, query[:100])
+
+            response = self._search_documents(query=query, top_k=self.top_k * 2)
+            documents = self._extract_documents(response)
+            if not documents:
+                logger.warning("rag.empty_response")
+                return []
+
+            all_results = list(documents)
+            logger.info("rag.unfiltered_results count=%s", len(all_results))
+
+            found_sections = {self._extract_section(doc) for doc in all_results}
+            logger.info("rag.available_sections sections=%s", sorted(found_sections))
+
+            filtered = [
+                doc for doc in all_results if self._extract_section(doc).casefold() == section.casefold()
+            ]
+            logger.info("rag.filtered_results section=%s count=%s", section, len(filtered))
+
+            selected = filtered if filtered else all_results[: self.top_k]
+            chunks: list[SectionChunk] = []
+            for doc in selected:
+                services = self._extract_metadata(doc, "services", [])
+                if isinstance(services, str):
+                    services = [services]
+
+                chunks.append(
+                    SectionChunk(
+                        section=self._extract_section(doc),
+                        text=self._extract_text(doc),
+                        client=str(self._extract_metadata(doc, "client", "") or ""),
+                        industry=str(self._extract_metadata(doc, "industry", "") or ""),
+                        services=tuple(str(item) for item in services if str(item).strip()),
+                    )
+                )
+
+            return chunks[: self.top_k]
+        except Exception:
+            logger.exception("rag.retrieve_failed section=%s", section)
+            return []
+
+    def count(self) -> int:
+        """Get document count from OCI Knowledge Base."""
+        try:
+            agent_client = GenerativeAiAgentClient(config=self._oci_config)
+            kb_response = agent_client.get_knowledge_base(self.knowledge_base_id)
+            document_count = getattr(kb_response.data, "document_count", None)
+            if isinstance(document_count, int):
+                return document_count
+        except Exception:
+            logger.exception("rag.count_knowledge_base_lookup_failed")
+
+        try:
+            test_response = self._search_documents(query="test", top_k=1)
+            docs = self._extract_documents(test_response)
+            return 1 if docs else 0
+        except Exception:
+            logger.exception("rag.count_failed")
+            return 0
+
     def diagnose_vector_store(self) -> bool:
-        """Run retrieval diagnostics to verify RAG corpus is loaded and queryable."""
+        """Diagnostic check using OCI API."""
         logger.info("rag.diagnostic_start")
+
         try:
             doc_count = self.count()
             logger.info("rag.diagnostic doc_count=%s", doc_count)
+
             if doc_count == 0:
-                logger.error("rag.diagnostic_failed reason=empty_index")
+                logger.error("rag.diagnostic_failed reason=empty_kb")
                 return False
 
-            sample_chunks = self._chunks[:3]
-            for chunk in sample_chunks:
-                logger.info(
-                    "rag.sample_chunk section=%s client=%s industry=%s preview=%s",
-                    chunk.section,
-                    chunk.client,
-                    chunk.industry,
-                    chunk.text[:100],
-                )
+            test_results = self._retrieve_by_section("TEST QUERY", {})
+            logger.info("rag.diagnostic test_results=%s", len(test_results))
 
             logger.info("rag.diagnostic_passed")
             return True
@@ -79,113 +196,86 @@ class SectionAwareRAGService:
             return False
 
     def refresh_from_env(self) -> int:
-        """Reload chunks from configured source to ensure latest indexed documents are available."""
-        chunks_path = os.getenv("RAG_CHUNKS_PATH", "")
-        _load_chunks.cache_clear()
-        self._chunks = _load_chunks(chunks_path) if chunks_path else []
+        """OCI KB auto-syncs from Object Storage; just return current count."""
+        logger.info("rag.refresh_from_env - OCI KB auto-syncs")
         self._cache.clear()
-        logger.info("rag.refresh_from_env chunk_count=%s", len(self._chunks))
-        return len(self._chunks)
+        return self.count()
 
-    def count(self) -> int:
-        """Return corpus document count."""
-        return len(self._chunks)
+
+    def _search_documents(self, query: str, top_k: int) -> Any:
+        """Invoke OCI search documents API (SDK method or raw REST fallback)."""
+        if hasattr(self.runtime_client, "search_documents"):
+            return self.runtime_client.search_documents(
+                agent_endpoint_id=self.agent_endpoint_id,
+                search_documents_details={"query": query, "top_k": top_k},
+            )
+
+        return self.runtime_client.base_client.call_api(
+            resource_path="/agentEndpoints/{agentEndpointId}/actions/searchDocuments",
+            method="POST",
+            path_params={"agentEndpointId": self.agent_endpoint_id},
+            body={"query": query, "top_k": top_k},
+        )
+
+    def _extract_documents(self, response: Any) -> list[Any]:
+        """Extract documents list from OCI SDK or raw response payload."""
+        data = getattr(response, "data", None)
+        if hasattr(data, "documents") and getattr(data, "documents"):
+            return list(data.documents)
+        if isinstance(data, dict):
+            docs = data.get("documents") or data.get("items") or []
+            return list(docs) if isinstance(docs, list) else []
+        if isinstance(response, tuple) and len(response) >= 1 and isinstance(response[0], dict):
+            docs = response[0].get("documents") or []
+            return list(docs) if isinstance(docs, list) else []
+        return []
+
+    def _extract_text(self, doc: Any) -> str:
+        """Extract text content from OCI document object."""
+        if isinstance(doc, dict):
+            return str(doc.get("text") or doc.get("content") or doc)
+        if hasattr(doc, "text") and getattr(doc, "text"):
+            return str(doc.text)
+        if hasattr(doc, "content") and getattr(doc, "content"):
+            return str(doc.content)
+        return str(doc)
+
+    def _extract_section(self, doc: Any) -> str:
+        """Extract section from document metadata."""
+        value = self._extract_metadata(doc, "section", "UNKNOWN")
+        return str(value or "UNKNOWN")
+
+    def _extract_metadata(self, doc: Any, key: str, default: Any = None) -> Any:
+        """Extract specific metadata field."""
+        if isinstance(doc, dict):
+            metadata = doc.get("metadata")
+            if isinstance(metadata, dict):
+                return metadata.get(key, default)
+            return default
+
+        metadata = getattr(doc, "metadata", None)
+        if isinstance(metadata, dict):
+            return metadata.get(key, default)
+        if metadata and hasattr(metadata, key):
+            return getattr(metadata, key)
+        return default
 
     def _build_semantic_query(self, section: str, project_data: dict[str, Any]) -> str:
-        services = ", ".join(str(s) for s in project_data.get("services", []) if isinstance(s, str))
-        return f"section={section}; client={project_data.get('client', '')}; industry={project_data.get('industry', '')}; services={services}"
+        """Build rich query for better retrieval."""
+        parts = [section]
 
-    def _retrieve_by_section(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:
-        """Retrieve chunks with comprehensive diagnostics and section metadata fallback."""
-        logger.info("rag.retrieve_start section=%s", section)
+        if project_data.get("client"):
+            parts.append(f"client: {project_data['client']}")
 
-        try:
-            total_docs = self.count()
-            logger.info("rag.vector_store_total_docs count=%s", total_docs)
-            if total_docs == 0:
-                logger.error("rag.empty_vector_store - NO DOCUMENTS INDEXED")
-                return []
-        except Exception:
-            logger.exception("rag.vector_store_check_failed")
+        if project_data.get("industry"):
+            parts.append(f"industry: {project_data['industry']}")
 
-        query = self._build_semantic_query(section=section, project_data=project_data)
-        logger.info("rag.query section=%s query=%s", section, query[:100])
+        if project_data.get("services"):
+            services = ", ".join(str(s) for s in project_data["services"])
+            parts.append(f"services: {services}")
 
-        try:
-            ranked_all = sorted(
-                self._chunks,
-                key=lambda chunk: self._score(chunk=chunk, project_data=project_data),
-                reverse=True,
-            )
-            all_results = ranked_all[: max(self.top_k * 4, 20)]
-            logger.info("rag.unfiltered_results count=%s", len(all_results))
-
-            if all_results:
-                found_sections = sorted({r.section for r in all_results if r.section})
-                logger.info("rag.available_sections sections=%s", found_sections)
-
-            filtered_ranked = sorted(
-                [chunk for chunk in all_results if chunk.section.casefold() == section.casefold()],
-                key=lambda chunk: self._score(chunk=chunk, project_data=project_data),
-                reverse=True,
-            )
-            logger.info("rag.filtered_results section=%s count=%s", section, len(filtered_ranked))
-
-            if not filtered_ranked and all_results:
-                logger.error("rag.metadata_mismatch requested_section=%s but_not_in_results=True", section)
-                return all_results[: self.top_k]
-
-            return filtered_ranked[: self.top_k] if filtered_ranked else []
-        except Exception:
-            logger.exception("rag.retrieve_failed section=%s", section)
-            return []
+        return " ".join(parts)
 
     def _cache_key(self, section: str, project_data: dict[str, Any]) -> str:
         raw = json.dumps(project_data, sort_keys=True, ensure_ascii=False)
         return f"{section.casefold()}::{raw}"
-
-    def _score(self, chunk: SectionChunk, project_data: dict[str, Any]) -> float:
-        score = 0.0
-        if chunk.client and chunk.client.casefold() == str(project_data.get("client", "")).casefold():
-            score += 3.0
-        if chunk.industry and chunk.industry.casefold() == str(project_data.get("industry", "")).casefold():
-            score += 2.0
-
-        req_services = {s.casefold() for s in project_data.get("services", []) if isinstance(s, str)}
-        chunk_services = {s.casefold() for s in chunk.services}
-        score += len(req_services.intersection(chunk_services)) * 1.5
-
-        project_blob = _normalize_text(" ".join(str(v) for v in project_data.values()))
-        chunk_blob = _normalize_text(chunk.text)
-        project_tokens = set(project_blob.split())
-        chunk_tokens = set(chunk_blob.split())
-        overlap = len(project_tokens.intersection(chunk_tokens))
-        return score + (overlap / max(len(project_tokens), 1))
-
-
-@lru_cache(maxsize=4)
-def _load_chunks(chunks_path: str) -> list[SectionChunk]:
-    path = Path(chunks_path)
-    if not path.exists():
-        return []
-
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    rows = payload if isinstance(payload, list) else []
-    chunks: list[SectionChunk] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        chunks.append(
-            SectionChunk(
-                section=str(row.get("section", "")).strip(),
-                text=str(row.get("text", "")).strip(),
-                client=str(row.get("client", "")).strip(),
-                industry=str(row.get("industry", "")).strip(),
-                services=tuple(str(item).strip() for item in row.get("services", []) if str(item).strip()),
-            )
-        )
-    return [chunk for chunk in chunks if chunk.section and chunk.text]
-
-
-def _normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-zA-Z0-9 ]", " ", text)).strip().casefold()
