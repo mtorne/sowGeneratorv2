@@ -257,6 +257,17 @@ async def generate_sow(
         structure = StructureController(template_root=project_root / "templates")
         rag_service = SectionAwareRAGService.from_env()
 
+        strict_rag_indexing = os.getenv("RAG_STRICT_INDEXING", "false").casefold() == "true"
+        logger.info("workflow.indexing_start source=RAG_CHUNKS_PATH strict=%s", strict_rag_indexing)
+        indexed_count = rag_service.refresh_from_env()
+        logger.info("workflow.indexing_complete indexed_count=%s", indexed_count)
+        if indexed_count == 0 and strict_rag_indexing:
+            raise ValueError("CRITICAL: No documents indexed - cannot generate with RAG")
+
+        diagnostic_ok = rag_service.diagnose_vector_store()
+        if not diagnostic_ok and strict_rag_indexing:
+            raise ValueError("CRITICAL: Vector store empty after indexing")
+
         logger.info("Swarm flow step: StructureController")
         drafted_sections: list[tuple[str, str]] = []
         for section in structure.sections():
@@ -266,14 +277,27 @@ async def generate_sow(
             else:
                 rag_context = rag_service.retrieve_section_context(section=section, project_data=context)
                 logger.info("Swarm flow step: section=%s retrieve_by_section returned %d chunks", section, len(rag_context))
-                disallowed = _disallowed_services(context)
-                section_content = writer.write_section(
-                    section_name=section,
-                    context=context,
-                    rag_context=rag_context,
-                    disallowed_services=disallowed,
-                )
+                if len(rag_context) == 0:
+                    logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
+                    if strict_rag_indexing:
+                        section_content = "[ERROR: No relevant documents found - cannot generate this section]"
+                    else:
+                        section_content = writer.write_section(
+                            section_name=section,
+                            context=context,
+                            rag_context=rag_context,
+                            disallowed_services=_disallowed_services(context),
+                        )
+                else:
+                    disallowed = _disallowed_services(context)
+                    section_content = writer.write_section(
+                        section_name=section,
+                        context=context,
+                        rag_context=rag_context,
+                        disallowed_services=disallowed,
+                    )
 
+                disallowed = _disallowed_services(context)
                 if disallowed:
                     mentioned = _mentioned_services(section_content)
                     invalid_services = [svc for svc in mentioned if svc in set(disallowed)]
@@ -284,6 +308,7 @@ async def generate_sow(
 
             section_content = _inject_diagram_analysis_context(section, section_content, context)
             drafted_sections.append((section, section_content))
+
 
         assembled = _assemble_document(drafted_sections)
         logger.info("Swarm flow step: QAAgent (light validation)")

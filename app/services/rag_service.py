@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,20 +43,102 @@ class SectionAwareRAGService:
         return cls(chunks=chunks, top_k=top_k)
 
     def retrieve_section_context(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:
-        """Retrieve top-k section-matched chunks with metadata-aware ranking."""
+        """Retrieve top-k section-matched chunks with diagnostics and semantic fallback."""
         cache_key = self._cache_key(section, project_data)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        section_filtered = [chunk for chunk in self._chunks if chunk.section.casefold() == section.casefold()]
-        ranked = sorted(
-            section_filtered,
-            key=lambda chunk: self._score(chunk=chunk, project_data=project_data),
-            reverse=True,
-        )
-        result = ranked[: self.top_k]
-        self._cache[cache_key] = result
-        return result
+        results = self._retrieve_by_section(section=section, project_data=project_data)
+        self._cache[cache_key] = results
+        return results
+
+    def diagnose_vector_store(self) -> bool:
+        """Run retrieval diagnostics to verify RAG corpus is loaded and queryable."""
+        logger.info("rag.diagnostic_start")
+        try:
+            doc_count = self.count()
+            logger.info("rag.diagnostic doc_count=%s", doc_count)
+            if doc_count == 0:
+                logger.error("rag.diagnostic_failed reason=empty_index")
+                return False
+
+            sample_chunks = self._chunks[:3]
+            for chunk in sample_chunks:
+                logger.info(
+                    "rag.sample_chunk section=%s client=%s industry=%s preview=%s",
+                    chunk.section,
+                    chunk.client,
+                    chunk.industry,
+                    chunk.text[:100],
+                )
+
+            logger.info("rag.diagnostic_passed")
+            return True
+        except Exception:
+            logger.exception("rag.diagnostic_exception")
+            return False
+
+    def refresh_from_env(self) -> int:
+        """Reload chunks from configured source to ensure latest indexed documents are available."""
+        chunks_path = os.getenv("RAG_CHUNKS_PATH", "")
+        _load_chunks.cache_clear()
+        self._chunks = _load_chunks(chunks_path) if chunks_path else []
+        self._cache.clear()
+        logger.info("rag.refresh_from_env chunk_count=%s", len(self._chunks))
+        return len(self._chunks)
+
+    def count(self) -> int:
+        """Return corpus document count."""
+        return len(self._chunks)
+
+    def _build_semantic_query(self, section: str, project_data: dict[str, Any]) -> str:
+        services = ", ".join(str(s) for s in project_data.get("services", []) if isinstance(s, str))
+        return f"section={section}; client={project_data.get('client', '')}; industry={project_data.get('industry', '')}; services={services}"
+
+    def _retrieve_by_section(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:
+        """Retrieve chunks with comprehensive diagnostics and section metadata fallback."""
+        logger.info("rag.retrieve_start section=%s", section)
+
+        try:
+            total_docs = self.count()
+            logger.info("rag.vector_store_total_docs count=%s", total_docs)
+            if total_docs == 0:
+                logger.error("rag.empty_vector_store - NO DOCUMENTS INDEXED")
+                return []
+        except Exception:
+            logger.exception("rag.vector_store_check_failed")
+
+        query = self._build_semantic_query(section=section, project_data=project_data)
+        logger.info("rag.query section=%s query=%s", section, query[:100])
+
+        try:
+            ranked_all = sorted(
+                self._chunks,
+                key=lambda chunk: self._score(chunk=chunk, project_data=project_data),
+                reverse=True,
+            )
+            all_results = ranked_all[: max(self.top_k * 4, 20)]
+            logger.info("rag.unfiltered_results count=%s", len(all_results))
+
+            if all_results:
+                found_sections = sorted({r.section for r in all_results if r.section})
+                logger.info("rag.available_sections sections=%s", found_sections)
+
+            filtered_ranked = sorted(
+                [chunk for chunk in all_results if chunk.section.casefold() == section.casefold()],
+                key=lambda chunk: self._score(chunk=chunk, project_data=project_data),
+                reverse=True,
+            )
+            logger.info("rag.filtered_results section=%s count=%s", section, len(filtered_ranked))
+
+            if not filtered_ranked and all_results:
+                logger.error("rag.metadata_mismatch requested_section=%s but_not_in_results=True", section)
+                return all_results[: self.top_k]
+
+            return filtered_ranked[: self.top_k] if filtered_ranked else []
+        except Exception:
+            logger.exception("rag.retrieve_failed section=%s", section)
+            return []
 
     def _cache_key(self, section: str, project_data: dict[str, Any]) -> str:
         raw = json.dumps(project_data, sort_keys=True, ensure_ascii=False)
