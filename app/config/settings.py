@@ -21,7 +21,7 @@ class OCISettings:
     multimodal_model_name: str
     agent_endpoint: str = "https://agent-runtime.generativeai.eu-frankfurt-1.oci.oraclecloud.com"
     agent_endpoint_id: str = "ocid1.genaiagentendpoint.oc1.eu-frankfurt-1.amaaaaaao7vto7ia42ib6b3xnopor3ynh3fsr7ui3p37bw3swel7ohg6n23q"
-    knowledge_base_id: str = ""
+    knowledge_base_id: str = "ocid1.genaiagentknowledgebase.oc1.eu-frankfurt-1.amaaaaaao7vto7iaccg4wkkgf77y6lmd4kilhcsjo7lkougmvhfkrdfq7kbq"
     rag_top_k: int = 5
 
     @classmethod
@@ -60,6 +60,9 @@ class OCISettings:
                 "OCI_AGENT_ENDPOINT_ID",
                 "ocid1.genaiagentendpoint.oc1.eu-frankfurt-1.amaaaaaao7vto7ia42ib6b3xnopor3ynh3fsr7ui3p37bw3swel7ohg6n23q",
             ),
-            knowledge_base_id=os.getenv("OCI_KNOWLEDGE_BASE_ID", ""),
+            knowledge_base_id=os.getenv(
+                "OCI_KNOWLEDGE_BASE_ID",
+                "ocid1.genaiagentknowledgebase.oc1.eu-frankfurt-1.amaaaaaao7vto7iaccg4wkkgf77y6lmd4kilhcsjo7lkougmvhfkrdfq7kbq",
+            ),
             rag_top_k=int(os.getenv("RAG_TOP_K", "5")),
         )
