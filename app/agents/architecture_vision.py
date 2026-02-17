@@ -305,6 +305,10 @@ class ArchitectureVisionAgent:
         if fence_match:
             candidates.append(("fenced_json", fence_match.group(1).strip()))
 
+        opening_fence_stripped = ArchitectureVisionAgent._strip_markdown_fence_prefix(text)
+        if opening_fence_stripped and opening_fence_stripped != text:
+            candidates.append(("opening_fence_stripped", opening_fence_stripped))
+
         balanced = ArchitectureVisionAgent._extract_balanced_json_object(text)
         if balanced:
             candidates.append(("balanced_object", balanced))
@@ -332,6 +336,21 @@ class ArchitectureVisionAgent:
         if candidates:
             logger.error("architecture_vision.json_parse_failed candidate_count=%s", len(candidates))
         return None
+
+    @staticmethod
+    def _strip_markdown_fence_prefix(text: str) -> str:
+        stripped = text.lstrip()
+        if not stripped.startswith("```"):
+            return text
+
+        newline_index = stripped.find("\n")
+        if newline_index == -1:
+            return text
+
+        body = stripped[newline_index + 1 :].strip()
+        if body.endswith("```"):
+            body = body[: -len("```")].strip()
+        return body
 
     @staticmethod
     def _extract_balanced_json_object(text: str) -> str | None:
