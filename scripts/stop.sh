@@ -1,22 +1,30 @@
 #!/bin/bash
 
-cd ..
+set -e
 
-if [ -f backend.pid ]; then
-    kill $(cat backend.pid)
-    rm backend.pid
-    echo "Backend stopped."
-else
-    echo "No backend process found."
-fi
+BASE_DIR="/home/ubuntu/labs/sowGenTemplate/ai-doc-genv2"
 
-if [ -f frontend.pid ]; then
-    kill $(cat frontend.pid)
-    rm frontend.pid
-    echo "Frontend stopped."
-else
-    echo "No frontend process found."
-fi
+stop_service() {
+    local name="$1"
+    local pid_file="$2"
 
-cd scripts
+    if [ -f "$pid_file" ]; then
+        local pid
+        pid=$(cat "$pid_file")
 
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            echo "$name stopped (PID $pid)."
+        else
+            echo "$name PID file found, but process $pid is not running."
+        fi
+
+        rm -f "$pid_file"
+    else
+        echo "No $name process found."
+    fi
+}
+
+stop_service "Backend" "$BASE_DIR/backend.pid"
+stop_service "App backend" "$BASE_DIR/app-backend.pid"
+stop_service "Frontend" "$BASE_DIR/frontend.pid"
