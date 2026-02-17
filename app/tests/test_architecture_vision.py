@@ -71,3 +71,60 @@ def test_architecture_vision_agent_retries_when_first_response_is_invalid_json(m
 
     assert result["analysis_confidence"]["overall_confidence"] == "high"
     assert result["architecture_extraction"]["components"]["compute"] == ["OKE"]
+
+
+def test_safe_parse_json_handles_unclosed_markdown_fence_prefix() -> None:
+    payload = {
+        "diagram_summary": {"diagram_type": "oci", "scope": "regional", "primary_intent": "ha"},
+        "components": {"compute": [], "kubernetes": [], "databases": [], "networking": [], "load_balancers": [], "security": [], "storage": [], "streaming": [], "on_prem_connectivity": []},
+        "relationships": [],
+        "high_availability_pattern": {"multi_ad": False, "multi_region": False, "active_active": False, "active_passive": False, "dr_mechanism": ""},
+        "confidence_assessment": {"diagram_clarity": "high", "component_identification_confidence": "high", "overall_confidence": "high", "reason": "clear"},
+    }
+    response = f"```json\n{json.dumps(payload)}"
+
+    parsed = ArchitectureVisionAgent._safe_parse_json(response)
+
+    assert parsed is not None
+    assert parsed["diagram_summary"]["diagram_type"] == "oci"
+
+
+def test_safe_parse_json_repairs_truncated_payload_with_dangling_colon() -> None:
+    response = """```json
+{
+  "diagram_summary": {
+    "diagram_type": "Multi-Cloud",
+    "scope": "HA",
+    "primary_intent": "DR"
+  },
+  "components": {
+    "compute": ["VM"],
+    "kubernetes": [],
+    "databases": [],
+    "networking": [],
+    "load_balancers": [],
+    "security": [],
+    "storage": [],
+    "streaming": [],
+    "on_prem_connectivity":
+"""
+
+    parsed = ArchitectureVisionAgent._safe_parse_json(response)
+
+    assert parsed is not None
+    assert parsed["components"]["compute"] == ["VM"]
+
+
+def test_safe_parse_json_repairs_unterminated_string_and_open_braces() -> None:
+    response = """```json
+{
+  "diagram_summary": {
+    "diagram_type": "Multi-Cloud",
+    "scope": "Application deployment across Azure and OCI",
+    "primary_intent": "database high availability and disas
+"""
+
+    parsed = ArchitectureVisionAgent._safe_parse_json(response)
+
+    assert parsed is not None
+    assert parsed["diagram_summary"]["diagram_type"] == "Multi-Cloud"
