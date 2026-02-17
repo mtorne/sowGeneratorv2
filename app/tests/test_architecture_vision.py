@@ -87,3 +87,44 @@ def test_safe_parse_json_handles_unclosed_markdown_fence_prefix() -> None:
 
     assert parsed is not None
     assert parsed["diagram_summary"]["diagram_type"] == "oci"
+
+
+def test_safe_parse_json_repairs_truncated_payload_with_dangling_colon() -> None:
+    response = """```json
+{
+  "diagram_summary": {
+    "diagram_type": "Multi-Cloud",
+    "scope": "HA",
+    "primary_intent": "DR"
+  },
+  "components": {
+    "compute": ["VM"],
+    "kubernetes": [],
+    "databases": [],
+    "networking": [],
+    "load_balancers": [],
+    "security": [],
+    "storage": [],
+    "streaming": [],
+    "on_prem_connectivity":
+"""
+
+    parsed = ArchitectureVisionAgent._safe_parse_json(response)
+
+    assert parsed is not None
+    assert parsed["components"]["compute"] == ["VM"]
+
+
+def test_safe_parse_json_repairs_unterminated_string_and_open_braces() -> None:
+    response = """```json
+{
+  "diagram_summary": {
+    "diagram_type": "Multi-Cloud",
+    "scope": "Application deployment across Azure and OCI",
+    "primary_intent": "database high availability and disas
+"""
+
+    parsed = ArchitectureVisionAgent._safe_parse_json(response)
+
+    assert parsed is not None
+    assert parsed["diagram_summary"]["diagram_type"] == "Multi-Cloud"

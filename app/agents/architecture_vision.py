@@ -313,6 +313,10 @@ class ArchitectureVisionAgent:
         if balanced:
             candidates.append(("balanced_object", balanced))
 
+        repaired = ArchitectureVisionAgent._repair_truncated_json_object(opening_fence_stripped)
+        if repaired and repaired not in {candidate for _, candidate in candidates}:
+            candidates.append(("repaired_truncated_json", repaired))
+
         for idx, (source, candidate) in enumerate(candidates, start=1):
             try:
                 parsed = json.loads(candidate)
@@ -351,6 +355,66 @@ class ArchitectureVisionAgent:
         if body.endswith("```"):
             body = body[: -len("```")].strip()
         return body
+
+
+    @staticmethod
+    def _repair_truncated_json_object(text: str) -> str | None:
+        raw = (text or "").strip()
+        if not raw:
+            return None
+
+        start = raw.find("{")
+        if start == -1:
+            return None
+
+        working = raw[start:]
+        if working.endswith("```"):
+            working = working[:-3].rstrip()
+
+        if not working:
+            return None
+
+        if working.endswith(":"):
+            working = f"{working} null"
+
+        if working and working[-1] == "\\":
+            working = working[:-1]
+
+        in_string = False
+        escaped = False
+        closers: list[str] = []
+
+        for char in working:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                closers.append("}")
+            elif char == "[":
+                closers.append("]")
+            elif char in "}]" and closers:
+                expected = closers[-1]
+                if char == expected:
+                    closers.pop()
+
+        if in_string:
+            working = f"{working}\""
+
+        while working and working[-1] in {":", ","}:
+            working = working[:-1].rstrip()
+
+        repaired = f"{working}{''.join(reversed(closers))}"
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+
+        return repaired if repaired != raw else None
 
     @staticmethod
     def _extract_balanced_json_object(text: str) -> str | None:
