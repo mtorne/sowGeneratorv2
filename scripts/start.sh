@@ -21,8 +21,8 @@ BACKEND_PID=$!
 echo "$BACKEND_PID" > "$BACKEND_PID_FILE"
 
 echo "Starting app backend..."
-cd "$BASE_DIR/app" || exit 1
-python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8001 > "$APP_BACKEND_LOG" 2>&1 &
+cd "$BASE_DIR" || exit 1
+python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001 > "$APP_BACKEND_LOG" 2>&1 &
 APP_BACKEND_PID=$!
 echo "$APP_BACKEND_PID" > "$APP_BACKEND_PID_FILE"
 
