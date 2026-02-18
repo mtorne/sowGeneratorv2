@@ -154,6 +154,7 @@ class ArchitectureVisionAgent:
                     prompt=prompt,
                     image_base64=image_base64,
                     mime_type=metadata.mime_type,
+                    image_metadata=metadata,
                 )
             except Exception as exc:
                 logger.exception("architecture_vision.llm_call_failed role=%s file=%s", diagram_role, file_name)
@@ -232,19 +233,27 @@ class ArchitectureVisionAgent:
     def _build_prompt(self, diagram_role: str) -> str:
         return f"{DIAGRAM_ANALYSIS_PROMPT}\n\ndiagram_role={diagram_role}"
 
-    def _call_multimodal_with_timeout(self, prompt: str, image_base64: str, mime_type: str) -> str:
+    def _call_multimodal_with_timeout(
+        self,
+        prompt: str,
+        image_base64: str,
+        mime_type: str,
+        image_metadata: _ImageMetadata,
+    ) -> str:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._call_multimodal, prompt, image_base64, mime_type)
+            future = executor.submit(self._call_multimodal, prompt, image_base64, mime_type, image_metadata)
             try:
                 return future.result(timeout=self.timeout_seconds)
             except FuturesTimeoutError as exc:
                 logger.error("architecture_vision.llm_timeout timeout_seconds=%s", self.timeout_seconds)
                 raise TimeoutError(f"Multimodal request timed out after {self.timeout_seconds} seconds") from exc
 
-    def _call_multimodal(self, prompt: str, image_base64: str, mime_type: str) -> str:
+    def _call_multimodal(self, prompt: str, image_base64: str, mime_type: str, image_metadata: _ImageMetadata) -> str:
         assert self.llm_client is not None
+        image_area = image_metadata.width * image_metadata.height
+        max_tokens = 8000 if image_area > 1_000_000 else 4000
         call_kwargs: dict[str, Any] = {
-            "max_tokens": 4000,
+            "max_tokens": max_tokens,
             "temperature": 0,
         }
         if self.model_name:
