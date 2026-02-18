@@ -41,6 +41,8 @@ class OCIClient:
 
     def multimodal_completion(self, prompt: str, image_base64: str, mime_type: str, **kwargs: object) -> str:
         model_name = str(kwargs.get("model_name") or self.settings.multimodal_model_name)
+        max_tokens = max(3000, int(kwargs.get("max_tokens") or 4000))
+        temperature = float(kwargs.get("temperature") if kwargs.get("temperature") is not None else 0)
 
         image_content = ImageContent(
             type="IMAGE",
@@ -52,10 +54,10 @@ class OCIClient:
         request = GenericChatRequest(
             messages=[message],
             api_format=BaseChatRequest.API_FORMAT_GENERIC,
-            temperature=0,
+            temperature=temperature,
             top_p=0.9,
             top_k=1,
-            max_tokens=4000,
+            max_tokens=max_tokens,
         )
         details = ChatDetails(
             compartment_id=self.settings.compartment_id,

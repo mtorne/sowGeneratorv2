@@ -243,7 +243,10 @@ class ArchitectureVisionAgent:
 
     def _call_multimodal(self, prompt: str, image_base64: str, mime_type: str) -> str:
         assert self.llm_client is not None
-        call_kwargs: dict[str, Any] = {}
+        call_kwargs: dict[str, Any] = {
+            "max_tokens": 4000,
+            "temperature": 0,
+        }
         if self.model_name:
             call_kwargs["model_name"] = self.model_name
         try:
@@ -296,6 +299,10 @@ class ArchitectureVisionAgent:
         text = (response_text or "").strip()
         candidates: list[tuple[str, str]] = []
 
+        stripped_fences = ArchitectureVisionAgent._strip_markdown_fences(text)
+        if stripped_fences:
+            text = stripped_fences
+
         if text:
             candidates.append(("raw", text))
         else:
@@ -305,15 +312,14 @@ class ArchitectureVisionAgent:
         if fence_match:
             candidates.append(("fenced_json", fence_match.group(1).strip()))
 
-        opening_fence_stripped = ArchitectureVisionAgent._strip_markdown_fence_prefix(text)
-        if opening_fence_stripped and opening_fence_stripped != text:
-            candidates.append(("opening_fence_stripped", opening_fence_stripped))
+        if ArchitectureVisionAgent._looks_like_truncated_json(text):
+            logger.warning("architecture_vision.truncated_json_detected len=%s", len(text))
 
         balanced = ArchitectureVisionAgent._extract_balanced_json_object(text)
         if balanced:
             candidates.append(("balanced_object", balanced))
 
-        repaired = ArchitectureVisionAgent._repair_truncated_json_object(opening_fence_stripped)
+        repaired = ArchitectureVisionAgent._repair_truncated_json_object(text)
         if repaired and repaired not in {candidate for _, candidate in candidates}:
             candidates.append(("repaired_truncated_json", repaired))
 
@@ -342,7 +348,7 @@ class ArchitectureVisionAgent:
         return None
 
     @staticmethod
-    def _strip_markdown_fence_prefix(text: str) -> str:
+    def _strip_markdown_fences(text: str) -> str:
         stripped = text.lstrip()
         if not stripped.startswith("```"):
             return text
@@ -355,6 +361,15 @@ class ArchitectureVisionAgent:
         if body.endswith("```"):
             body = body[: -len("```")].strip()
         return body
+
+    @staticmethod
+    def _looks_like_truncated_json(text: str) -> bool:
+        cleaned = (text or "").strip()
+        if not cleaned.startswith("{"):
+            return False
+        if ArchitectureVisionAgent._extract_balanced_json_object(cleaned) is not None:
+            return False
+        return True
 
 
     @staticmethod
