@@ -146,3 +146,21 @@ def test_call_multimodal_uses_high_token_limit_and_deterministic_temperature(mon
     assert calls
     assert calls[0]["max_tokens"] == 4000
     assert calls[0]["temperature"] == 0
+
+
+def test_call_multimodal_uses_larger_token_limit_for_high_resolution_images(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _KwargCaptureClient:
+        def multimodal_completion(self, prompt: str, image_base64: str, mime_type: str, **kwargs: object) -> str:
+            calls.append(kwargs)
+            return "{}"
+
+    agent = ArchitectureVisionAgent(llm_client=_KwargCaptureClient(), model_name="vision-model")
+    monkeypatch.setattr(agent, "_read_image_metadata", lambda **_: _ImageMetadata(width=1322, height=1241, fmt="png", mime_type="image/png"))
+
+    agent.analyze(file_name="arch.png", content=b"abc", diagram_role="target")
+
+    assert calls
+    assert calls[0]["max_tokens"] == 8000
+    assert calls[0]["temperature"] == 0
