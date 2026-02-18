@@ -78,6 +78,7 @@ class OCIGenAIService:
         max_tokens=2000,
         top_k_override=None,
         response_format: Optional[Dict[str, Any]] = None,
+        temperature_override: Optional[float] = None,
     ) -> GenericChatRequest:
         """Build a Generic request (for Llama/Grok/Gemini wrappers)."""
         if top_k_override is not None:
@@ -88,7 +89,7 @@ class OCIGenAIService:
         request = GenericChatRequest(
             messages=messages,
             max_tokens=max_tokens,
-            temperature=oci_config.temperature,
+            temperature=float(oci_config.temperature if temperature_override is None else temperature_override),
             top_p=oci_config.top_p,
             top_k=k_val,
             api_format=BaseChatRequest.API_FORMAT_GENERIC,
@@ -104,7 +105,7 @@ class OCIGenAIService:
         model = (model_id or "").lower()
         if "gemini" in model:
             return int(getattr(oci_config, "gemini_max_output_tokens", 4096))
-        return int(getattr(oci_config, "max_output_tokens", 2000))
+        return max(3000, int(getattr(oci_config, "max_output_tokens", 4000)))
 
     def _build_cohere_request(self, prompt: str, max_tokens=2000) -> CohereChatRequest:
         return CohereChatRequest(
@@ -177,6 +178,7 @@ class OCIGenAIService:
             max_tokens=self._resolve_max_tokens(target_model),
             top_k_override=safe_top_k,
             response_format=response_format,
+            temperature_override=0,
         )
 
         try:
@@ -189,6 +191,7 @@ class OCIGenAIService:
                     max_tokens=self._resolve_max_tokens(target_model),
                     top_k_override=safe_top_k,
                     response_format=None,
+                    temperature_override=0,
                 )
                 return self._call_model(target_model, fallback_request)
             raise

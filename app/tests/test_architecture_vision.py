@@ -128,3 +128,21 @@ def test_safe_parse_json_repairs_unterminated_string_and_open_braces() -> None:
 
     assert parsed is not None
     assert parsed["diagram_summary"]["diagram_type"] == "Multi-Cloud"
+
+
+def test_call_multimodal_uses_high_token_limit_and_deterministic_temperature(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _KwargCaptureClient:
+        def multimodal_completion(self, prompt: str, image_base64: str, mime_type: str, **kwargs: object) -> str:
+            calls.append(kwargs)
+            return "{}"
+
+    agent = ArchitectureVisionAgent(llm_client=_KwargCaptureClient(), model_name="vision-model")
+    monkeypatch.setattr(agent, "_read_image_metadata", lambda **_: _ImageMetadata(width=1200, height=800, fmt="png", mime_type="image/png"))
+
+    agent.analyze(file_name="arch.png", content=b"abc", diagram_role="current")
+
+    assert calls
+    assert calls[0]["max_tokens"] == 4000
+    assert calls[0]["temperature"] == 0

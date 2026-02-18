@@ -276,19 +276,140 @@ class ArchitectureVisionAgent:
             return self._normalize({})
 
     def _parse_json(self, raw: str) -> Dict[str, Any]:
-        text = (raw or "").strip()
+        text = self._strip_markdown_fences((raw or "").strip())
         if not text:
             return {}
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            match = re.search(r"\{[\s\S]*\}", text)
-            if not match:
-                return {}
+
+        candidates: List[str] = [text]
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            candidates.append(match.group(0))
+
+        if self._looks_like_truncated_json(text):
+            logger.warning("architecture_vision.truncated_json_detected len=%s", len(text))
+            repaired = self._repair_truncated_json_object(text)
+            if repaired:
+                candidates.append(repaired)
+
+        seen = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
             try:
-                return json.loads(match.group(0))
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
             except json.JSONDecodeError:
-                return {}
+                continue
+        return {}
+
+    @staticmethod
+    def _strip_markdown_fences(text: str) -> str:
+        stripped = text.lstrip()
+        if not stripped.startswith("```"):
+            return text
+
+        newline_index = stripped.find("\n")
+        if newline_index == -1:
+            return text
+
+        body = stripped[newline_index + 1 :].strip()
+        if body.endswith("```"):
+            body = body[:-3].strip()
+        return body
+
+    @staticmethod
+    def _looks_like_truncated_json(text: str) -> bool:
+        cleaned = (text or "").strip()
+        if not cleaned.startswith("{"):
+            return False
+        if ArchitectureVisionAgent._extract_balanced_json_object(cleaned) is not None:
+            return False
+        return True
+
+    @staticmethod
+    def _extract_balanced_json_object(text: str) -> str | None:
+        start = text.find("{")
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : idx + 1]
+
+        return None
+
+    @staticmethod
+    def _repair_truncated_json_object(text: str) -> str | None:
+        raw = (text or "").strip()
+        if not raw:
+            return None
+
+        start = raw.find("{")
+        if start == -1:
+            return None
+
+        working = raw[start:]
+        if working.endswith("```"):
+            working = working[:-3].rstrip()
+        if working.endswith(":"):
+            working = f"{working} null"
+        if working and working[-1] == "\\":
+            working = working[:-1]
+
+        in_string = False
+        escaped = False
+        closers: List[str] = []
+
+        for char in working:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                closers.append("}")
+            elif char == "[":
+                closers.append("]")
+            elif char in "}]" and closers and char == closers[-1]:
+                closers.pop()
+
+        if in_string:
+            working = f'{working}"'
+
+        while working and working[-1] in {":", ","}:
+            working = working[:-1].rstrip()
+
+        repaired = f"{working}{''.join(reversed(closers))}"
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+        return repaired if repaired != raw else None
 
     def _normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized = json.loads(json.dumps(self.OUTPUT_TEMPLATE))
