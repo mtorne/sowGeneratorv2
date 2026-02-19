@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
-import re  # add at top of file if not already there
+
 import oci
 from oci import retry
 from oci.generative_ai_agent import GenerativeAiAgentClient
 from oci.generative_ai_agent_runtime import GenerativeAiAgentRuntimeClient
 
 from app.config.settings import OCISettings
-
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,20 @@ class SectionChunk:
 class SectionAwareRAGService:
     """RAG service that retrieves context using OCI Knowledge Base search."""
 
+    SECTION_QUERY_MAP = {
+        "SOW VERSION HISTORY":              "document version history revision changes amendments",
+        "STATUS AND NEXT STEPS":            "project status milestones next steps actions timeline",
+        "PROJECT PARTICIPANTS":             "project team roles responsibilities stakeholders contacts",
+        "IN SCOPE APPLICATION":            "applications systems in scope workloads included services",
+        "PROJECT OVERVIEW":                 "project objectives goals background executive summary",
+        "CURRENT STATE ARCHITECTURE":       "current architecture existing infrastructure on-premise legacy systems",
+        "CURRENTLY USED TECHNOLOGY STACK":  "current technology stack software tools databases middleware",
+        "OCI SERVICE SIZING AND AMOUNTS":   "OCI cloud service sizing compute storage license quantities",
+        "FUTURE STATE ARCHITECTURE":        "target architecture future state cloud migration OCI design",
+        "ARCHITECTURE DEPLOYMENT OVERVIEW": "deployment architecture network topology zones regions availability",
+        "CLOSING FEEDBACK":                 "closing remarks acceptance criteria success metrics feedback",
+    }
+
     def __init__(
         self,
         oci_config: dict[str, Any] | None,
@@ -46,7 +60,6 @@ class SectionAwareRAGService:
         self.agent_endpoint_id = agent_endpoint_id
         self.knowledge_base_id = knowledge_base_id
         self.top_k = top_k
-        self.session_id: str | None = None
         self._cache: dict[str, list[SectionChunk]] = {}
 
         if runtime_client is not None:
@@ -120,6 +133,7 @@ class SectionAwareRAGService:
 
             response = self._search_via_chat(query=query, top_k=self.top_k * 2)
             documents = self._extract_documents(response)
+
             if not documents:
                 logger.warning("rag.empty_response")
                 return []
@@ -131,7 +145,8 @@ class SectionAwareRAGService:
             logger.info("rag.available_sections sections=%s", sorted(found_sections))
 
             filtered = [
-                doc for doc in all_results if self._extract_section(doc).casefold() == section.casefold()
+                doc for doc in all_results
+                if self._extract_section(doc).casefold() == section.casefold()
             ]
             logger.info("rag.filtered_results section=%s count=%s", section, len(filtered))
 
@@ -203,33 +218,23 @@ class SectionAwareRAGService:
         self._cache.clear()
         return self.count()
 
-
-    def _create_session(self) -> str:
-        """Create agent session for chat-based retrieval."""
-        from oci.generative_ai_agent_runtime.models import CreateSessionDetails
-
-        session_details = CreateSessionDetails(display_name=f"sow-rag-{int(time.time())}")
-
-        response = self.runtime_client.create_session(
-            agent_endpoint_id=self.agent_endpoint_id,
-            create_session_details=session_details,
-        )
-
-        self.session_id = response.data.id
-        logger.info("rag.session_created session_id=%s", self.session_id)
-        return self.session_id
-
     def _search_via_chat(self, query: str, top_k: int) -> Any:
-        """Search using Chat API (required for tool-based RAG)."""
-        from oci.generative_ai_agent_runtime.models import ChatDetails
+        """Fresh session per query — prevents context poisoning across searches."""
+        from oci.generative_ai_agent_runtime.models import CreateSessionDetails, ChatDetails
 
-        if not self.session_id:
-            self._create_session()
+        session_response = self.runtime_client.create_session(
+            agent_endpoint_id=self.agent_endpoint_id,
+            create_session_details=CreateSessionDetails(
+                display_name=f"sow-rag-{int(time.time())}"
+            ),
+        )
+        session_id = session_response.data.id
+        logger.debug("rag.session_created session_id=%s", session_id)
 
         chat_details = ChatDetails(
             user_message=f"Retrieve {top_k} relevant documents about: {query}",
             should_stream=False,
-            session_id=self.session_id,
+            session_id=session_id,
         )
 
         return self.runtime_client.chat(
@@ -266,7 +271,7 @@ class SectionAwareRAGService:
 
     def _extract_text(self, doc: Any) -> str:
         """Extract text from citation/document object."""
-        if hasattr(doc, "source_text"):
+        if hasattr(doc, "source_text") and doc.source_text:
             return str(doc.source_text)
 
         if isinstance(doc, dict):
@@ -283,23 +288,18 @@ class SectionAwareRAGService:
 
         return str(doc)
 
- 
-
     def _extract_section(self, doc: Any) -> str:
         """Extract section from metadata or frontmatter embedded in chunk text."""
-        # First try structured metadata (opc_meta / source_location)
         value = self._extract_metadata(doc, "section", None)
         if value and str(value).strip().upper() not in ("", "UNKNOWN"):
             return str(value).strip().upper()
 
-        # Fall back to parsing YAML frontmatter from chunk body
         text = self._extract_text(doc)
         match = re.match(r"^---\s*\nsection:\s*(.+?)\s*\n", text, re.IGNORECASE)
         if match:
             return match.group(1).strip().upper()
 
         return "UNKNOWN"
-
 
     def _extract_metadata(self, doc: Any, key: str, default: Any = None) -> Any:
         """Extract metadata from citation/document."""
@@ -320,20 +320,6 @@ class SectionAwareRAGService:
         if metadata and hasattr(metadata, key):
             return getattr(metadata, key)
         return default
-
-    SECTION_QUERY_MAP = {
-    "SOW VERSION HISTORY":               "document version history revision changes amendments",
-    "STATUS AND NEXT STEPS":             "project status milestones next steps actions timeline",
-    "PROJECT PARTICIPANTS":              "project team roles responsibilities stakeholders contacts",
-    "IN SCOPE APPLICATION":             "applications systems in scope workloads included services",
-    "PROJECT OVERVIEW":                  "project objectives goals background executive summary",
-    "CURRENT STATE ARCHITECTURE":        "current architecture existing infrastructure on-premise legacy systems",
-    "CURRENTLY USED TECHNOLOGY STACK":   "current technology stack software tools databases middleware",
-    "OCI SERVICE SIZING AND AMOUNTS":    "OCI cloud service sizing compute storage license quantities",
-    "FUTURE STATE ARCHITECTURE":         "target architecture future state cloud migration OCI design",
-    "ARCHITECTURE DEPLOYMENT OVERVIEW":  "deployment architecture network topology zones regions availability",
-    "CLOSING FEEDBACK":                  "closing remarks acceptance criteria success metrics feedback",
-}
 
     def _build_semantic_query(self, section: str, project_data: dict[str, Any]) -> str:
         """Build rich semantic query using section-specific descriptors."""
