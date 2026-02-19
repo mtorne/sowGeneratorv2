@@ -22,12 +22,13 @@ CANONICAL_STRUCTURE = [
     "MANAGED SERVICES CONFIGURATION",
     "CLOSING FEEDBACK",
 ]
-
 STATIC_SECTIONS = {
-    "COMPANY PROFILE",
-    "SECURITY",
-    "HIGH AVAILABILITY",
-    "MANAGED SERVICES CONFIGURATION",
+    "SOW VERSION HISTORY",        # always v1.0 boilerplate, no RAG value
+    "COMPANY PROFILE",            # ✅ already static
+    "SECURITY",                   # ✅ already static
+    "HIGH AVAILABILITY",          # ✅ already static
+    "MANAGED SERVICES CONFIGURATION",  # ✅ already static
+    "CLOSING FEEDBACK",           # post-project human fill, no RAG value
 }
 
 

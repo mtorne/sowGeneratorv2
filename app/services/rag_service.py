@@ -7,7 +7,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any
-
+import re  # add at top of file if not already there
 import oci
 from oci import retry
 from oci.generative_ai_agent import GenerativeAiAgentClient
@@ -283,10 +283,23 @@ class SectionAwareRAGService:
 
         return str(doc)
 
+ 
+
     def _extract_section(self, doc: Any) -> str:
-        """Extract section from document metadata."""
-        value = self._extract_metadata(doc, "section", "UNKNOWN")
-        return str(value or "UNKNOWN")
+        """Extract section from metadata or frontmatter embedded in chunk text."""
+        # First try structured metadata (opc_meta / source_location)
+        value = self._extract_metadata(doc, "section", None)
+        if value and str(value).strip().upper() not in ("", "UNKNOWN"):
+            return str(value).strip().upper()
+
+        # Fall back to parsing YAML frontmatter from chunk body
+        text = self._extract_text(doc)
+        match = re.match(r"^---\s*\nsection:\s*(.+?)\s*\n", text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip().upper()
+
+        return "UNKNOWN"
+
 
     def _extract_metadata(self, doc: Any, key: str, default: Any = None) -> Any:
         """Extract metadata from citation/document."""
@@ -308,19 +321,31 @@ class SectionAwareRAGService:
             return getattr(metadata, key)
         return default
 
+    SECTION_QUERY_MAP = {
+    "SOW VERSION HISTORY":               "document version history revision changes amendments",
+    "STATUS AND NEXT STEPS":             "project status milestones next steps actions timeline",
+    "PROJECT PARTICIPANTS":              "project team roles responsibilities stakeholders contacts",
+    "IN SCOPE APPLICATION":             "applications systems in scope workloads included services",
+    "PROJECT OVERVIEW":                  "project objectives goals background executive summary",
+    "CURRENT STATE ARCHITECTURE":        "current architecture existing infrastructure on-premise legacy systems",
+    "CURRENTLY USED TECHNOLOGY STACK":   "current technology stack software tools databases middleware",
+    "OCI SERVICE SIZING AND AMOUNTS":    "OCI cloud service sizing compute storage license quantities",
+    "FUTURE STATE ARCHITECTURE":         "target architecture future state cloud migration OCI design",
+    "ARCHITECTURE DEPLOYMENT OVERVIEW":  "deployment architecture network topology zones regions availability",
+    "CLOSING FEEDBACK":                  "closing remarks acceptance criteria success metrics feedback",
+}
+
     def _build_semantic_query(self, section: str, project_data: dict[str, Any]) -> str:
-        """Build rich query for better retrieval."""
-        parts = [section]
+        """Build rich semantic query using section-specific descriptors."""
+        base = self.SECTION_QUERY_MAP.get(section.upper().strip(), section)
+        parts = [base]
 
         if project_data.get("client"):
-            parts.append(f"client: {project_data['client']}")
-
+            parts.append(project_data["client"])
         if project_data.get("industry"):
-            parts.append(f"industry: {project_data['industry']}")
-
+            parts.append(project_data["industry"])
         if project_data.get("services"):
-            services = ", ".join(str(s) for s in project_data["services"])
-            parts.append(f"services: {services}")
+            parts.append(", ".join(str(s) for s in project_data["services"]))
 
         return " ".join(parts)
 
