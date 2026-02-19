@@ -45,7 +45,7 @@ class StructureController:
     def is_static(self, section: str) -> bool:
         """Return whether section should be injected from static templates."""
         return section in STATIC_SECTIONS
-
+    
     def inject_template(self, section: str) -> str:
         """Load versioned static section content from templates directory."""
         file_name = section.lower().replace(" ", "_") + ".md"
@@ -53,6 +53,7 @@ class StructureController:
         if template_path.exists():
             return template_path.read_text(encoding="utf-8").strip()
 
-        disclaimer = (self.template_root / "static_sections" / "disclaimer.md").read_text(encoding="utf-8").strip()
-        generic_oci = (self.template_root / "static_sections" / "generic_oci_explanations.md").read_text(encoding="utf-8").strip()
-        return f"{disclaimer}\n\n{generic_oci}"
+        # Safe named fallback instead of disclaimer+generic_oci
+        logger.warning("static_section.missing file=%s", file_name)
+        return f"[{section} — to be completed]"
+
