@@ -58,11 +58,11 @@ class OCISettings:
             ),
             agent_endpoint_id=os.getenv(
                 "OCI_AGENT_ENDPOINT_ID",
-                "ocid1.genaiagentendpoint.oc1.eu-frankfurt-1.amaaaaaao7vto7ia42ib6b3xnopor3ynh3fsr7ui3p37bw3swel7ohg6n23q",
+                "ocid1.genaiagentendpoint.oc1.eu-frankfurt-1.amaaaaaao7vto7iau5a62bj3xpcruqxsvwapsqgdnbi5u7lqbfryj6zg5r6q",
             ),
             knowledge_base_id=os.getenv(
                 "OCI_KNOWLEDGE_BASE_ID",
-                "ocid1.genaiagentknowledgebase.oc1.eu-frankfurt-1.amaaaaaao7vto7iaccg4wkkgf77y6lmd4kilhcsjo7lkougmvhfkrdfq7kbq",
+                "ocid1.genaiagentknowledgebase.oc1.eu-frankfurt-1.amaaaaaao7vto7iaqe273bywoyvxntvw5dhuqwtdq2xu2p44ashk2jazehoa",
             ),
             rag_top_k=int(os.getenv("RAG_TOP_K", "5")),
         )
