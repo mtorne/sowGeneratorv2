@@ -54,6 +54,5 @@ class StructureController:
             return template_path.read_text(encoding="utf-8").strip()
 
         # Safe named fallback instead of disclaimer+generic_oci
-        logger.warning("static_section.missing file=%s", file_name)
         return f"[{section} — to be completed]"
 
