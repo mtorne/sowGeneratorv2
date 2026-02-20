@@ -250,8 +250,7 @@ class ArchitectureVisionAgent:
 
     def _call_multimodal(self, prompt: str, image_base64: str, mime_type: str, image_metadata: _ImageMetadata) -> str:
         assert self.llm_client is not None
-        image_area = image_metadata.width * image_metadata.height
-        max_tokens = 8000 if image_area > 1_000_000 else 4000
+        max_tokens = 8000 
         call_kwargs: dict[str, Any] = {
             "max_tokens": max_tokens,
             "temperature": 0,
@@ -398,8 +397,8 @@ class ArchitectureVisionAgent:
         if not working:
             return None
 
-        if working.endswith(":"):
-            working = f"{working} null"
+        if working.rstrip().endswith(":"):
+            working = working.rstrip() + " null"
 
         if working and working[-1] == "\\":
             working = working[:-1]

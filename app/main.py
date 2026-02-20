@@ -316,7 +316,7 @@ async def generate_sow(
 
         logger.info("Swarm flow step: DocBuilder")
         builder = DocumentBuilder(template_path=project_root / "templates" / "sow_template.docx")
-        file_name = builder.build(full_document=reviewed, output_dir=project_root)
+        file_name = builder.build(sections=drafted_sections, output_dir=project_root)
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name, markdown_file=markdown_name)
     except ServiceValidationError as exc:
