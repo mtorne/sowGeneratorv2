@@ -95,11 +95,11 @@ class DocumentBuilder:
         keyword = SECTION_HEADING_KEYWORDS.get(section_name.upper(), section_name.lower())
         paragraphs = list(doc.paragraphs)
 
-        # Find the matching heading paragraph
+        # Find the matching heading paragraph (body-level paragraphs only)
         heading_idx: int | None = None
         heading_level = 1
         for i, para in enumerate(paragraphs):
-            if not para.style.name.startswith("Heading"):
+            if not self._is_heading_style(para):
                 continue
             if keyword.lower() in para.text.lower():
                 heading_idx = i
@@ -107,6 +107,26 @@ class DocumentBuilder:
                 break
 
         if heading_idx is None:
+            # Fallback: search inside table cells — python-docx excludes these from doc.paragraphs
+            table_elem = self._find_heading_in_tables(doc, keyword)
+            if table_elem is not None:
+                logger.info(
+                    "doc_builder.heading_in_table section=%s — injecting after table element",
+                    section_name,
+                )
+                self._inject_blocks_after_element(table_elem, content)
+                content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
+                logger.info("doc_builder.section_injected section=%s blocks=%d via table_fallback", section_name, len(content_blocks))
+                return True
+
+            available_headings = [p.text for p in paragraphs if self._is_heading_style(p)]
+            logger.warning(
+                "doc_builder.heading_not_found section=%s keyword=%r — "
+                "available template headings: %s",
+                section_name,
+                keyword,
+                available_headings,
+            )
             return False
 
         # Find range: heading+1 → next same-or-higher-level heading
@@ -126,19 +146,8 @@ class DocumentBuilder:
                 body.remove(para._element)
 
         # Insert content blocks directly after the heading element
-        heading_elem = paragraphs[heading_idx]._element
+        self._inject_blocks_after_element(paragraphs[heading_idx]._element, content)
         content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
-
-        for block in reversed(content_blocks):
-            new_para = OxmlElement("w:p")
-            new_run = OxmlElement("w:r")
-            new_text = OxmlElement("w:t")
-            new_text.text = block
-            new_text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
-            new_run.append(new_text)
-            new_para.append(new_run)
-            heading_elem.addnext(new_para)
-
         logger.info("doc_builder.section_injected section=%s blocks=%d", section_name, len(content_blocks))
         return True
 
@@ -148,6 +157,48 @@ class DocumentBuilder:
         for block in content.split("\n\n"):
             if block.strip():
                 doc.add_paragraph(block.strip())
+
+    def _find_heading_in_tables(self, doc: Document, keyword: str):
+        """Search table cells for a heading paragraph matching keyword.
+
+        Returns the parent <w:tbl> XML element so content can be inserted after
+        the entire table, or None if not found.
+        """
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        if self._is_heading_style(para) and keyword.lower() in para.text.lower():
+                            # para._element → <w:p>  parent → <w:tc>  parent → <w:tr>  parent → <w:tbl>
+                            return para._element.getparent().getparent().getparent()
+        return None
+
+    @staticmethod
+    def _inject_blocks_after_element(anchor_elem, content: str) -> None:
+        """Insert content paragraphs as next siblings of anchor_elem.
+
+        Inserts in reverse order so that block[0] ends up immediately after anchor_elem.
+        """
+        content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
+        for block in reversed(content_blocks):
+            new_para = OxmlElement("w:p")
+            new_run = OxmlElement("w:r")
+            new_text = OxmlElement("w:t")
+            new_text.text = block
+            new_text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+            new_run.append(new_text)
+            new_para.append(new_run)
+            anchor_elem.addnext(new_para)
+
+    @staticmethod
+    def _is_heading_style(para) -> bool:
+        """Return True if the paragraph uses any Heading-based style (including custom derived styles)."""
+        style = para.style
+        while style is not None:
+            if style.name.startswith("Heading"):
+                return True
+            style = getattr(style, "base_style", None)
+        return False
 
     @staticmethod
     def _get_heading_level(para) -> int | None:
