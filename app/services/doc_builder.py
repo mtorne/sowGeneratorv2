@@ -107,6 +107,14 @@ class DocumentBuilder:
                 break
 
         if heading_idx is None:
+            available_headings = [p.text for p in paragraphs if p.style.name.startswith("Heading")]
+            logger.warning(
+                "doc_builder.heading_not_found section=%s keyword=%r — "
+                "available template headings: %s",
+                section_name,
+                keyword,
+                available_headings,
+            )
             return False
 
         # Find range: heading+1 → next same-or-higher-level heading
