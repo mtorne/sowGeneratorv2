@@ -116,7 +116,11 @@ class DocumentBuilder:
                 )
                 self._inject_blocks_after_element(table_elem, content)
                 content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
-                logger.info("doc_builder.section_injected section=%s blocks=%d via table_fallback", section_name, len(content_blocks))
+                logger.info(
+                    "doc_builder.section_injected section=%s blocks=%d via table_fallback",
+                    section_name,
+                    len(content_blocks),
+                )
                 return True
 
             available_headings = [p.text for p in paragraphs if self._is_heading_style(p)]
