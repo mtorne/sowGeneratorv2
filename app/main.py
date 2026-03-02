@@ -293,10 +293,11 @@ async def generate_sow(
                 rag_context = rag_service.retrieve_section_context(section=section, project_data=context)
                 logger.info("Swarm flow step: section=%s retrieve_by_section returned %d chunks", section, len(rag_context))
                 if len(rag_context) == 0:
-                    logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
                     if strict_rag_indexing:
+                        logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
                         section_content = "[ERROR: No relevant documents found - cannot generate this section]"
                     else:
+                        logger.warning("section=%s ZERO_CHUNKS - generating from context only (no RAG examples)", section)
                         section_content = writer.write_section(
                             section_name=section,
                             context=context,
