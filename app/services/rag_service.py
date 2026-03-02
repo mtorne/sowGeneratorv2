@@ -122,12 +122,6 @@ class SectionAwareRAGService:
         logger.info("rag.retrieve_start section=%s", section)
 
         try:
-            doc_count = self.count()
-            logger.info("rag.vector_store_total_docs count=%s", doc_count)
-            if doc_count == 0:
-                logger.error("rag.empty_vector_store - NO DOCUMENTS INDEXED")
-                return []
-
             query = self._build_semantic_query(section, project_data)
             logger.info("rag.query section=%s query=%s", section, query[:100])
 
@@ -135,7 +129,7 @@ class SectionAwareRAGService:
             documents = self._extract_documents(response)
 
             if not documents:
-                logger.warning("rag.empty_response")
+                logger.warning("rag.empty_response section=%s", section)
                 return []
 
             all_results = list(documents)
@@ -150,9 +144,16 @@ class SectionAwareRAGService:
             ]
             logger.info("rag.filtered_results section=%s count=%s", section, len(filtered))
 
-            selected = filtered if filtered else all_results[: self.top_k]
+            if not filtered:
+                logger.warning(
+                    "rag.no_section_match section=%s available=%s — returning empty (no cross-section fallback)",
+                    section,
+                    sorted(found_sections),
+                )
+                return []
+
             chunks: list[SectionChunk] = []
-            for doc in selected:
+            for doc in filtered:
                 services = self._extract_metadata(doc, "services", [])
                 if isinstance(services, str):
                     services = [services]
@@ -192,25 +193,24 @@ class SectionAwareRAGService:
             return 0
 
     def diagnose_vector_store(self) -> bool:
-        """Diagnostic check using OCI API."""
+        """Connectivity check: verify the OCI KB endpoint is reachable and returns results."""
         logger.info("rag.diagnostic_start")
-
         try:
             doc_count = self.count()
             logger.info("rag.diagnostic doc_count=%s", doc_count)
-
             if doc_count == 0:
                 logger.error("rag.diagnostic_failed reason=empty_kb")
                 return False
-
-            test_results = self._retrieve_by_section("TEST QUERY", {})
-            logger.info("rag.diagnostic test_results=%s", len(test_results))
-
             logger.info("rag.diagnostic_passed")
             return True
         except Exception:
             logger.exception("rag.diagnostic_exception")
             return False
+
+    def clear_cache(self) -> None:
+        """Clear in-memory retrieval cache without querying the KB."""
+        self._cache.clear()
+        logger.info("rag.cache_cleared")
 
     def refresh_from_env(self) -> int:
         """OCI KB auto-syncs from Object Storage; just return current count."""

@@ -55,10 +55,6 @@ KNOWN_SERVICES = {
 
 
 
-class ServiceValidationError(RuntimeError):
-    """Raised when generated output includes services outside explicit allow-list."""
-
-
 class SowInput(BaseModel):
     """Input payload for SoW generation."""
 
@@ -241,12 +237,28 @@ async def generate_sow(
         if current_architecture_image and current_architecture_image.filename:
             current_bytes = await current_architecture_image.read()
             logger.info("Swarm flow step: ArchitectureVisionAgent (current)")
-            architecture_analysis["current"] = architecture_vision.analyze(current_architecture_image.filename, current_bytes, "current")
+            result = architecture_vision.analyze(current_architecture_image.filename, current_bytes, "current")
+            arch_error = result.get("architecture_extraction", {}).get("error")
+            if arch_error:
+                logger.warning(
+                    "ArchitectureVisionAgent (current) failed — diagram context skipped: %s",
+                    arch_error.get("message", arch_error),
+                )
+            else:
+                architecture_analysis["current"] = result
             await current_architecture_image.seek(0)
         if target_architecture_image and target_architecture_image.filename:
             target_bytes = await target_architecture_image.read()
             logger.info("Swarm flow step: ArchitectureVisionAgent (target)")
-            architecture_analysis["target"] = architecture_vision.analyze(target_architecture_image.filename, target_bytes, "target")
+            result = architecture_vision.analyze(target_architecture_image.filename, target_bytes, "target")
+            arch_error = result.get("architecture_extraction", {}).get("error")
+            if arch_error:
+                logger.warning(
+                    "ArchitectureVisionAgent (target) failed — diagram context skipped: %s",
+                    arch_error.get("message", arch_error),
+                )
+            else:
+                architecture_analysis["target"] = result
             await target_architecture_image.seek(0)
         if architecture_analysis:
             context["architecture_analysis"] = architecture_analysis
@@ -258,15 +270,18 @@ async def generate_sow(
         rag_service = SectionAwareRAGService.from_env()
 
         strict_rag_indexing = os.getenv("RAG_STRICT_INDEXING", "false").casefold() == "true"
-        logger.info("workflow.indexing_start source=RAG_CHUNKS_PATH strict=%s", strict_rag_indexing)
-        indexed_count = rag_service.refresh_from_env()
-        logger.info("workflow.indexing_complete indexed_count=%s", indexed_count)
-        if indexed_count == 0 and strict_rag_indexing:
-            raise ValueError("CRITICAL: No documents indexed - cannot generate with RAG")
-
-        diagnostic_ok = rag_service.diagnose_vector_store()
-        if not diagnostic_ok and strict_rag_indexing:
-            raise ValueError("CRITICAL: Vector store empty after indexing")
+        logger.info("workflow.rag_start strict=%s", strict_rag_indexing)
+        if strict_rag_indexing:
+            indexed_count = rag_service.refresh_from_env()
+            logger.info("workflow.rag_count indexed_count=%s", indexed_count)
+            if indexed_count == 0:
+                raise ValueError("CRITICAL: No documents indexed - cannot generate with RAG")
+            diagnostic_ok = rag_service.diagnose_vector_store()
+            if not diagnostic_ok:
+                raise ValueError("CRITICAL: Vector store empty after indexing")
+        else:
+            rag_service.clear_cache()
+            logger.info("workflow.rag_cache_cleared strict=false skipping count and diagnostic")
 
         logger.info("Swarm flow step: StructureController")
         drafted_sections: list[tuple[str, str]] = []
@@ -302,8 +317,10 @@ async def generate_sow(
                     mentioned = _mentioned_services(section_content)
                     invalid_services = [svc for svc in mentioned if svc in set(disallowed)]
                     if invalid_services:
-                        raise ServiceValidationError(
-                            f"Disallowed services in {section}: {', '.join(sorted(invalid_services))}"
+                        logger.warning(
+                            "section=%s contains disallowed services despite prompt constraint: %s",
+                            section,
+                            ", ".join(sorted(invalid_services)),
                         )
 
             section_content = _inject_diagram_analysis_context(section, section_content, context)
@@ -319,9 +336,6 @@ async def generate_sow(
         file_name = builder.build(sections=drafted_sections, output_dir=project_root)
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name, markdown_file=markdown_name)
-    except ServiceValidationError as exc:
-        logger.warning("SoW generation failed validation: %s", exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("SoW generation failed")
         raise HTTPException(status_code=500, detail="Failed to generate SoW") from exc

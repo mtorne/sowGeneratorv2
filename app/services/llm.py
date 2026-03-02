@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import random
+import time
 from dataclasses import dataclass
+from typing import Any, Callable, TypeVar
 
 import oci
 from oci.generative_ai_inference import GenerativeAiInferenceClient
@@ -20,6 +23,43 @@ from oci.generative_ai_inference.models import (
 from app.config.settings import OCISettings
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+# HTTP status codes that indicate a transient OCI server-side error worth retrying.
+_RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
+_MAX_LLM_RETRIES = 3
+
+
+def _call_with_retry(
+    fn: Callable[..., _T],
+    *args: Any,
+    max_retries: int = _MAX_LLM_RETRIES,
+    **kwargs: Any,
+) -> _T:
+    """Call *fn* with exponential backoff on transient OCI ServiceErrors.
+
+    Retries up to *max_retries* times on HTTP 429/5xx responses.
+    Other exceptions (parsing failures, 4xx client errors) propagate immediately.
+    """
+    for attempt in range(1, max_retries + 2):  # +2: initial attempt + max_retries
+        try:
+            return fn(*args, **kwargs)
+        except oci.exceptions.ServiceError as exc:
+            if exc.status not in _RETRYABLE_HTTP_STATUSES or attempt > max_retries:
+                raise
+            wait = min(1.0 * (2 ** (attempt - 1)) + random.uniform(0, 1.0), 30.0)
+            logger.warning(
+                "OCI transient error status=%s attempt=%d/%d retrying in %.1fs: %s",
+                exc.status,
+                attempt,
+                max_retries,
+                wait,
+                exc.message,
+            )
+            time.sleep(wait)
+    # Unreachable — loop always returns or raises.
+    raise RuntimeError("_call_with_retry exhausted without result")  # pragma: no cover
 
 
 @dataclass(frozen=True)
@@ -108,10 +148,10 @@ def call_llm(system_prompt: str, user_prompt: str) -> str:
 
     try:
         logger.info("Calling OCI Generative AI model")
-        response = client.chat(details)
+        response = _call_with_retry(client.chat, details)
         return _extract_text(response)
     except oci.exceptions.ServiceError as exc:
-        logger.exception("OCI service error")
+        logger.exception("OCI service error status=%s", exc.status)
         raise RuntimeError(f"OCI service error: {exc.message}") from exc
     except Exception as exc:
         logger.exception("Unexpected OCI LLM error")

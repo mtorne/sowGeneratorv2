@@ -24,21 +24,25 @@ class WriterAgent:
             f"Reference Example {idx}:\n{chunk.text}"
             for idx, chunk in enumerate(rag_context or [], start=1)
         )
-        disallowed_note = ""
-        if disallowed_services:
-            disallowed_note = f"Forbidden services: {', '.join(disallowed_services)}."
 
-        system_prompt = (
+        system_parts = [
             "You are a senior Oracle Cloud Solution Architect writing a formal Statement of Work. "
             "Follow the established enterprise tone and structure. Reuse phrasing when appropriate "
-            "but adapt to project specifics. Do not invent services not present in project data."
-        )
+            "but adapt to project specifics. Do not invent services not present in project data.",
+        ]
+        if disallowed_services:
+            system_parts.append(
+                "IMPORTANT: You MUST NOT mention, reference, or recommend the following OCI services "
+                f"anywhere in your output: {', '.join(disallowed_services)}. "
+                "If any of these services appear in reference examples, ignore them entirely."
+            )
+        system_prompt = " ".join(system_parts)
+
         user_prompt = (
             f"Write section: {section_name}\n"
             "Maintain similar structure as reference examples.\n\n"
             f"Project data JSON:\n{json.dumps(context, ensure_ascii=False)}\n\n"
             f"Retrieved similar section examples:\n{examples or 'No retrieved examples available.'}\n\n"
-            f"{disallowed_note}\n"
             "Output only the section content."
         )
         return call_llm(system_prompt=system_prompt, user_prompt=user_prompt).strip()
