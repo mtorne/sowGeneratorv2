@@ -270,15 +270,18 @@ async def generate_sow(
         rag_service = SectionAwareRAGService.from_env()
 
         strict_rag_indexing = os.getenv("RAG_STRICT_INDEXING", "false").casefold() == "true"
-        logger.info("workflow.indexing_start source=RAG_CHUNKS_PATH strict=%s", strict_rag_indexing)
-        indexed_count = rag_service.refresh_from_env()
-        logger.info("workflow.indexing_complete indexed_count=%s", indexed_count)
-        if indexed_count == 0 and strict_rag_indexing:
-            raise ValueError("CRITICAL: No documents indexed - cannot generate with RAG")
-
-        diagnostic_ok = rag_service.diagnose_vector_store()
-        if not diagnostic_ok and strict_rag_indexing:
-            raise ValueError("CRITICAL: Vector store empty after indexing")
+        logger.info("workflow.rag_start strict=%s", strict_rag_indexing)
+        if strict_rag_indexing:
+            indexed_count = rag_service.refresh_from_env()
+            logger.info("workflow.rag_count indexed_count=%s", indexed_count)
+            if indexed_count == 0:
+                raise ValueError("CRITICAL: No documents indexed - cannot generate with RAG")
+            diagnostic_ok = rag_service.diagnose_vector_store()
+            if not diagnostic_ok:
+                raise ValueError("CRITICAL: Vector store empty after indexing")
+        else:
+            rag_service.clear_cache()
+            logger.info("workflow.rag_cache_cleared strict=false skipping count and diagnostic")
 
         logger.info("Swarm flow step: StructureController")
         drafted_sections: list[tuple[str, str]] = []
