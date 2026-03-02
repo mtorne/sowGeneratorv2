@@ -7,8 +7,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
-
 from app.services.llm import call_llm
 from app.services.rag_service import SectionChunk
 
@@ -17,8 +15,19 @@ logger = logging.getLogger(__name__)
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "templates" / "prompts"
 
 
-def _jinja_env() -> Environment:
-    """Return a Jinja2 environment pointed at the prompts directory."""
+def _jinja_env():  # type: ignore[return]
+    """Return a Jinja2 environment pointed at the prompts directory.
+
+    Import is deferred so a missing jinja2 install raises at call time
+    (with a clear message) rather than crashing the entire app at startup.
+    """
+    try:
+        from jinja2 import Environment, FileSystemLoader, StrictUndefined
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "jinja2 is required but not installed — run: pip install jinja2"
+        ) from exc
+
     return Environment(
         loader=FileSystemLoader(str(_PROMPTS_DIR)),
         undefined=StrictUndefined,
