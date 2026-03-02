@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,10 @@ KNOWN_SERVICES = {
     "waf",
 }
 
+# Maximum number of concurrent OCI RAG calls during parallel fan-out.
+# Keeps concurrency below OCI rate-limit thresholds while still delivering
+# a significant speedup over fully sequential retrieval.
+_RAG_CONCURRENCY = int(os.getenv("RAG_CONCURRENCY", "4"))
 
 
 class SowInput(BaseModel):
@@ -122,8 +128,6 @@ def _disallowed_services(context: dict[str, Any]) -> list[str]:
     return sorted(service for service in KNOWN_SERVICES if service not in allowed)
 
 
-
-
 def _sanitize_validation_value(value: Any) -> Any:
     if isinstance(value, (bytes, bytearray)):
         return f"<binary data, {len(value)} bytes>"
@@ -167,8 +171,6 @@ def download_generated_file(file_name: str) -> FileResponse:
     if file_path.suffix.lower() == ".md":
         media_type = "text/markdown"
     return FileResponse(path=str(file_path), filename=file_path.name, media_type=media_type)
-
-
 
 
 def _inject_diagram_analysis_context(section: str, section_content: str, context: dict[str, Any]) -> str:
@@ -283,6 +285,38 @@ async def generate_sow(
             rag_service.clear_cache()
             logger.info("workflow.rag_cache_cleared strict=false skipping count and diagnostic")
 
+        # Phase 2: Fan-out RAG retrieval for all dynamic sections in parallel.
+        # OCI KB calls are blocking I/O; asyncio.to_thread runs each in the default
+        # thread-pool executor so the event loop stays responsive.  A semaphore caps
+        # concurrency at RAG_CONCURRENCY (default 4) to stay within OCI rate limits.
+        dynamic_sections = [s for s in structure.sections() if not structure.is_static(s)]
+        _t0_rag = time.monotonic()
+        logger.info(
+            "workflow.rag_parallel_start sections=%d concurrency=%d",
+            len(dynamic_sections),
+            _RAG_CONCURRENCY,
+        )
+
+        _rag_sem = asyncio.Semaphore(_RAG_CONCURRENCY)
+
+        async def _fetch_rag(sec: str) -> tuple[str, list]:
+            async with _rag_sem:
+                return sec, await asyncio.to_thread(
+                    rag_service.retrieve_section_context,
+                    section=sec,
+                    project_data=context,
+                )
+
+        rag_map: dict[str, list] = dict(
+            await asyncio.gather(*[_fetch_rag(s) for s in dynamic_sections])
+        )
+        logger.info(
+            "workflow.rag_parallel_complete elapsed=%.1fs sections=%d",
+            time.monotonic() - _t0_rag,
+            len(dynamic_sections),
+        )
+
+        # Assemble sections in canonical order using pre-fetched RAG context.
         logger.info("Swarm flow step: StructureController")
         drafted_sections: list[tuple[str, str]] = []
         for section in structure.sections():
@@ -290,13 +324,21 @@ async def generate_sow(
                 logger.info("Swarm flow step: section=%s static template injection", section)
                 section_content = structure.inject_template(section)
             else:
-                rag_context = rag_service.retrieve_section_context(section=section, project_data=context)
-                logger.info("Swarm flow step: section=%s retrieve_by_section returned %d chunks", section, len(rag_context))
+                rag_context = rag_map[section]
+                logger.info(
+                    "Swarm flow step: section=%s retrieve_by_section returned %d chunks",
+                    section,
+                    len(rag_context),
+                )
                 if len(rag_context) == 0:
-                    logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
                     if strict_rag_indexing:
+                        logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
                         section_content = "[ERROR: No relevant documents found - cannot generate this section]"
                     else:
+                        logger.warning(
+                            "section=%s ZERO_CHUNKS - generating from context only (no RAG examples)",
+                            section,
+                        )
                         section_content = writer.write_section(
                             section_name=section,
                             context=context,
@@ -325,7 +367,6 @@ async def generate_sow(
 
             section_content = _inject_diagram_analysis_context(section, section_content, context)
             drafted_sections.append((section, section_content))
-
 
         assembled = _assemble_document(drafted_sections)
         logger.info("Swarm flow step: QAAgent (light validation)")
