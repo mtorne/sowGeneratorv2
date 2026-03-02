@@ -18,7 +18,7 @@ from oci.generative_ai_inference.models import (
 )
 
 from app.config.settings import OCISettings
-from app.services.llm import _extract_text
+from app.services.llm import _call_with_retry, _extract_text
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +66,10 @@ class OCIClient:
         )
 
         try:
-            response = self._client.chat(details)
+            response = _call_with_retry(self._client.chat, details)
             return _extract_text(response)
         except oci.exceptions.ServiceError as exc:
-            logger.exception("oci_multimodal.service_error")
+            logger.exception("oci_multimodal.service_error status=%s", exc.status)
             raise RuntimeError(f"OCI multimodal service error: {exc.message}") from exc
         except Exception as exc:
             logger.exception("oci_multimodal.unexpected_error")
