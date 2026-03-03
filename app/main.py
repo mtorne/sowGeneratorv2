@@ -245,6 +245,7 @@ async def generate_sow(
         context: dict[str, Any] = payload_model.model_dump()
 
         architecture_analysis: dict[str, Any] = {}
+        diagram_image_bytes: dict[str, bytes] = {}
         _vision_inputs: list[tuple] = []
         if current_architecture_image and current_architecture_image.filename:
             _vision_inputs.append((current_architecture_image, "current"))
@@ -255,7 +256,9 @@ async def generate_sow(
             _t0_vision = time.monotonic()
             logger.info("workflow.vision_parallel_start diagrams=%d", len(_vision_inputs))
 
-            async def _run_vision(upload_file, role: str) -> tuple[str, dict[str, Any]]:
+            async def _run_vision(
+                upload_file, role: str
+            ) -> tuple[str, dict[str, Any], bytes]:
                 file_bytes = await upload_file.read()
                 await upload_file.seek(0)
                 result = await asyncio.to_thread(
@@ -264,7 +267,7 @@ async def generate_sow(
                     file_bytes,
                     role,
                 )
-                return role, result
+                return role, result, file_bytes
 
             vision_results = await asyncio.gather(
                 *[_run_vision(uf, role) for uf, role in _vision_inputs]
@@ -275,7 +278,7 @@ async def generate_sow(
                 len(_vision_inputs),
             )
 
-            for role, result in vision_results:
+            for role, result, raw_bytes in vision_results:
                 arch_error = result.get("architecture_extraction", {}).get("error")
                 if arch_error:
                     logger.warning(
@@ -285,6 +288,10 @@ async def generate_sow(
                     )
                 else:
                     architecture_analysis[role] = result
+                # Always retain image bytes regardless of vision success so the
+                # image can still be embedded in the DOCX placeholder box.
+                if raw_bytes:
+                    diagram_image_bytes[role] = raw_bytes
 
         if architecture_analysis:
             context["architecture_analysis"] = architecture_analysis
@@ -340,6 +347,15 @@ async def generate_sow(
             len(dynamic_sections),
         )
 
+        # Extract target diagram components once; passed to WriterAgent for the
+        # ARCHITECTURE COMPONENTS section so the LLM uses only real services.
+        _target_arch = (
+            context.get("architecture_analysis", {})
+            .get("target", {})
+            .get("architecture_extraction", {})
+        )
+        _diagram_components: dict | None = _target_arch.get("components") or None
+
         # Assemble sections in canonical order using pre-fetched RAG context.
         logger.info("Swarm flow step: StructureController")
         drafted_sections: list[tuple[str, str]] = []
@@ -353,6 +369,10 @@ async def generate_sow(
                     "Swarm flow step: section=%s retrieve_by_section returned %d chunks",
                     section,
                     len(rag_context),
+                )
+                # Pass diagram components only for the ARCHITECTURE COMPONENTS section.
+                _section_diagram_components = (
+                    _diagram_components if section == "ARCHITECTURE COMPONENTS" else None
                 )
                 if len(rag_context) == 0:
                     if strict_rag_indexing:
@@ -376,6 +396,7 @@ async def generate_sow(
                             context=context,
                             rag_context=rag_context,
                             disallowed_services=_disallowed_services(context),
+                            diagram_components=_section_diagram_components,
                         )
                 else:
                     disallowed = _disallowed_services(context)
@@ -384,6 +405,7 @@ async def generate_sow(
                         context=context,
                         rag_context=rag_context,
                         disallowed_services=disallowed,
+                        diagram_components=_section_diagram_components,
                     )
 
                 disallowed = _disallowed_services(context)
@@ -414,7 +436,11 @@ async def generate_sow(
             customer_name=context.get("client", ""),
             project_name=context.get("project_name", ""),
         )
-        file_name = builder.build(sections=drafted_sections, output_dir=project_root)
+        file_name = builder.build(
+            sections=drafted_sections,
+            output_dir=project_root,
+            diagram_images=diagram_image_bytes or None,
+        )
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name, markdown_file=markdown_name)
     except Exception as exc:

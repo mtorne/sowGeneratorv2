@@ -5,7 +5,20 @@ Maintain the structure, tone, and level of detail shown in the reference example
 Be specific: name the actual components, services, and objectives from the project data.
 Do not repeat the section heading. Do not add sub-headings with markdown syntax.
 
-{% if section_name in ('ARCHITECTURE COMPONENTS', 'IMPLEMENTATION DETAILS') %}
+{% if section_name == 'ARCHITECTURE COMPONENTS' %}
+Group content using EXACTLY these sub-topic labels (plain-text, each on its own line):
+Networking | Security | Compute | Storage and Databases | DevOps and Management
+{% if diagram_components %}
+IMPORTANT: The target architecture diagram was analysed automatically. Use ONLY the real
+OCI services and components listed below — do not invent anything not present here.
+Name every concrete component in prose; avoid generic filler sentences.
+
+Diagram-identified components (JSON):
+{{ diagram_components | tojson(indent=2) }}
+{% else %}
+Provide 2-4 sentences per sub-topic with project-specific configuration details.
+{% endif %}
+{% elif section_name == 'IMPLEMENTATION DETAILS' %}
 Group content into the following sub-topics, each introduced with a plain-text label on its own line:
 Networking | Security | Compute | Storage and Databases | DevOps and Management
 Provide 2-4 sentences per sub-topic with project-specific configuration details.

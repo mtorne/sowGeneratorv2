@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 import re
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Inches
 
 logger = logging.getLogger(__name__)
 
@@ -242,14 +245,28 @@ class DocumentBuilder:
             self.project_name,
         )
 
-    def build(self, sections: list[tuple[str, str]], output_dir: Path) -> str:
-        """Inject sections into template headings and save DOCX."""
+    def build(
+        self,
+        sections: list[tuple[str, str]],
+        output_dir: Path,
+        diagram_images: dict[str, bytes] | None = None,
+    ) -> str:
+        """Inject sections into template headings and save DOCX.
+
+        Args:
+            sections: List of (section_name, content) tuples in canonical order.
+            output_dir: Directory where the output DOCX is written.
+            diagram_images: Optional mapping of ``"current"`` / ``"target"`` → raw
+                PNG/JPG bytes of the architecture diagram images to embed in the
+                corresponding placeholder boxes in the template.
+        """
         output_dir.mkdir(parents=True, exist_ok=True)
         output_name = f"output_{uuid4().hex}.docx"
         output_path = output_dir / output_name
 
         doc = self._load_or_create_template()
         self._substitute_names(doc)
+        self._fill_project_tables(doc)
 
         if self.template_path.exists():
             for section_name, content in sections:
@@ -267,6 +284,9 @@ class DocumentBuilder:
                     if block.strip():
                         doc.add_paragraph(block.strip())
 
+        if diagram_images:
+            self._insert_diagram_images(doc, diagram_images)
+
         doc.save(str(output_path))
         logger.info("Saved generated SoW document: %s", output_path)
         return output_name
@@ -279,6 +299,177 @@ class DocumentBuilder:
         output_path.write_text(full_document, encoding="utf-8")
         logger.info("Saved generated SoW markdown: %s", output_path)
         return output_name
+
+    # ------------------------------------------------------------------
+    # Diagram image insertion  (Feature B)
+    # ------------------------------------------------------------------
+
+    def _insert_diagram_images(self, doc: Document, diagram_images: dict[str, bytes]) -> None:
+        """Replace placeholder images with the actual uploaded architecture diagrams.
+
+        Searches for the headings "Current State Architecture - Diagram" and
+        "Target Architecture Diagram" in the document, finds the placeholder
+        drawing paragraph that follows each heading (within 10 paragraphs), clears
+        it, and inserts the real image as a 5.5-inch wide inline picture.
+
+        Args:
+            diagram_images: Mapping of ``"current"`` or ``"target"`` → raw image bytes.
+        """
+        _DRAWING_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        _DRAWING_TAG = f"{{{_DRAWING_NS}}}drawing"
+
+        slot_map = [
+            ("current", "current state architecture - diagram"),
+            ("target", "target architecture diagram"),
+        ]
+
+        all_paras = doc.paragraphs
+
+        for role, keyword in slot_map:
+            image_bytes = diagram_images.get(role)
+            if not image_bytes:
+                logger.debug("doc_builder.diagram_skip role=%s (no image bytes)", role)
+                continue
+
+            # Find the matching heading paragraph
+            heading_idx: int | None = None
+            for i, p in enumerate(all_paras):
+                if keyword in p.text.lower() and self._is_heading_style(p):
+                    heading_idx = i
+                    break
+
+            if heading_idx is None:
+                logger.warning(
+                    "doc_builder.diagram_heading_not_found role=%s keyword=%r", role, keyword
+                )
+                continue
+
+            # Find the first paragraph after the heading that contains a drawing
+            placeholder_para = None
+            search_limit = min(heading_idx + 10, len(all_paras))
+            for i in range(heading_idx + 1, search_limit):
+                p = all_paras[i]
+                if p._element.findall(f".//{_DRAWING_TAG}"):
+                    placeholder_para = p
+                    logger.debug(
+                        "doc_builder.diagram_placeholder_found role=%s para_idx=%d", role, i
+                    )
+                    break
+
+            if placeholder_para is None:
+                # No existing placeholder — insert a new empty paragraph right after
+                # the heading and use it as the target.
+                logger.info(
+                    "doc_builder.diagram_no_placeholder role=%s — inserting after heading", role
+                )
+                new_p_elem = OxmlElement("w:p")
+                all_paras[heading_idx]._element.addnext(new_p_elem)
+                # Retrieve as Paragraph object
+                placeholder_para = next(
+                    (p for p in doc.paragraphs if p._element is new_p_elem), None
+                )
+                if placeholder_para is None:
+                    logger.warning(
+                        "doc_builder.diagram_para_create_failed role=%s", role
+                    )
+                    continue
+
+            # Clear existing content, preserving paragraph properties (<w:pPr>)
+            p_elem = placeholder_para._element
+            pPr = p_elem.find(qn("w:pPr"))
+            # Remove all children except pPr
+            for child in list(p_elem):
+                if child is not pPr:
+                    p_elem.remove(child)
+
+            # Embed the image via python-docx (handles relationship registration)
+            try:
+                run = placeholder_para.add_run()
+                run.add_picture(BytesIO(image_bytes), width=Inches(5.5))
+                logger.info(
+                    "doc_builder.diagram_image_inserted role=%s bytes=%d",
+                    role,
+                    len(image_bytes),
+                )
+            except Exception:
+                logger.exception(
+                    "doc_builder.diagram_image_insert_failed role=%s", role
+                )
+
+    # ------------------------------------------------------------------
+    # Table data filling  (Feature C)
+    # ------------------------------------------------------------------
+
+    def _fill_project_tables(self, doc: Document) -> None:
+        """Fill structured table data in the DOCX template.
+
+        Actions performed:
+        - Version History table: sets today's date in the Revision Date column of
+          the first data row when the cell is blank or contains a placeholder.
+        - Any table: replaces ``DD-MM-YYYY`` date placeholder strings with an
+          em-dash (``—``) so the document looks clean; engineers fill real dates.
+        """
+        today_str = datetime.date.today().strftime("%d-%m-%Y")
+        _DATE_PLACEHOLDER = re.compile(r"^D[D\-]+M[M\-]+Y+$", re.IGNORECASE)
+
+        for table in doc.tables:
+            if not table.rows:
+                continue
+
+            # Build header map: column index → normalised header text
+            header_row = table.rows[0]
+            headers = [
+                cell.text.strip().lower().replace("\n", " ")
+                for cell in header_row.cells
+            ]
+
+            # ── Version History table ──────────────────────────────────
+            # Detect by "revision date" or ("version" + "revised by") headers.
+            is_version_table = (
+                "revision date" in headers
+                or ("version #" in headers and "revised by" in headers)
+                or ("version" in headers and "revised by" in headers)
+            )
+            if is_version_table and len(table.rows) > 1:
+                data_row = table.rows[1]
+                for ci, header in enumerate(headers):
+                    if ci >= len(data_row.cells):
+                        break
+                    cell = data_row.cells[ci]
+                    cell_text = cell.text.strip()
+                    if "date" in header and (
+                        not cell_text or _DATE_PLACEHOLDER.match(cell_text)
+                    ):
+                        self._set_cell_text(cell, today_str)
+                        logger.info(
+                            "doc_builder.version_history_date_set date=%s", today_str
+                        )
+                    elif "revised by" in header and not cell_text:
+                        self._set_cell_text(cell, "Oracle Labs")
+                        logger.info("doc_builder.version_history_author_set")
+                continue  # skip the DD-MM-YYYY pass for version table (already handled)
+
+            # ── General DD-MM-YYYY placeholder sweep ──────────────────
+            for row in table.rows[1:]:
+                for cell in row.cells:
+                    if _DATE_PLACEHOLDER.match(cell.text.strip()):
+                        self._set_cell_text(cell, "\u2014")  # em-dash
+
+        logger.info("doc_builder.project_tables_filled")
+
+    @staticmethod
+    def _set_cell_text(cell, text: str) -> None:
+        """Set the text of the first paragraph in a table cell, preserving formatting."""
+        for para in cell.paragraphs:
+            # Clear all runs
+            for run in para.runs:
+                run.text = ""
+            # Write into the first run, or create one
+            if para.runs:
+                para.runs[0].text = text
+            else:
+                para.add_run(text)
+            return  # only touch the first paragraph
 
     def _inject_section(self, doc: Document, section_name: str, content: str) -> bool:
         """Find heading in template, remove placeholder paragraphs, inject content."""
