@@ -45,8 +45,17 @@ class WriterAgent:
         context: dict[str, Any],
         rag_context: list[SectionChunk] | None = None,
         disallowed_services: list[str] | None = None,
+        diagram_components: dict | None = None,
     ) -> str:
-        """Create a section body in professional consulting style."""
+        """Create a section body in professional consulting style.
+
+        Args:
+            diagram_components: Structured components dict extracted from the target
+                architecture diagram analysis (ArchitectureVisionAgent output). When
+                provided for the ARCHITECTURE COMPONENTS section the LLM is instructed
+                to use only the real services identified in the diagram rather than
+                generating generic descriptions.
+        """
         examples = "\n\n".join(
             f"Reference Example {idx}:\n{chunk.text}"
             for idx, chunk in enumerate(rag_context or [], start=1)
@@ -62,6 +71,7 @@ class WriterAgent:
             section_name=section_name,
             context_json=json.dumps(context, ensure_ascii=False),
             examples=examples,
+            diagram_components=diagram_components,
         ).strip()
 
         logger.debug(
