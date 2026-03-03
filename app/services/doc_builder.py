@@ -39,6 +39,8 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
     "SECURITY":                                     "security",
     "HIGH AVAILABILITY":                            "high availability",
     "MANAGED SERVICES CONFIGURATION":               "managed services",
+    # Architect review — appended at end when not found in template heading
+    "ARCHITECT REVIEW":                             "architect review",
     "CLOSING FEEDBACK":                             "closing feedback",
 }
 
@@ -46,10 +48,17 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
 # Use for sections that are 100% LLM-generated with no useful template intro text.
 _FULL_CLEAR_SECTIONS = frozenset({
     "ARCHITECTURE COMPONENTS",
-    # Scope is written as a clean deliverables proposal — no template text needed.
-    "SCOPE",
+    # NOTE: SCOPE is intentionally NOT here — the template colored-box headers
+    # ("Initial understanding of the scope", "Desired Outcome of customer",
+    # "Desired outcome agreed with Oracle") must survive so users can fill them.
     # The Description H3 sub-section has only generic placeholder intro text.
     "CURRENT STATE ARCHITECTURE DESCRIPTION",
+})
+
+# Sections where LLM content should be injected RIGHT AFTER the heading,
+# BEFORE any surviving template paragraphs (e.g. colored scope boxes).
+_INJECT_AT_TOP_SECTIONS = frozenset({
+    "SCOPE",
 })
 
 # Sections whose LLM output uses sub-topic labels (Networking, Security, Compute …)
@@ -57,6 +66,8 @@ _FULL_CLEAR_SECTIONS = frozenset({
 _LABELED_FORMAT_SECTIONS = frozenset({
     "ARCHITECTURE COMPONENTS",
     "IMPLEMENTATION DETAILS",
+    # Architect review uses the same label+bullet format for its sub-sections.
+    "ARCHITECT REVIEW",
 })
 
 # Known sub-topic label set for LABELED_FORMAT_SECTIONS
@@ -68,12 +79,23 @@ _SUB_TOPIC_LABELS = frozenset({
     "devops and management",
     "storage",
     "databases",
+    # Architect Review sub-sections
+    "generation quality",
+    "data gaps",
+    "next steps",
+    "recommendations",
 })
 
 # Regex to split prose into sentences at ". " followed by an uppercase letter
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
 
-# Placeholder text patterns to remove when found inside a section
+# Literal string placed by LLM for unknown values — rendered red in the DOCX.
+_PENDING_MARKER = "PENDING TO REVIEW"
+
+# Placeholder text patterns to remove when found inside a section.
+# NOTE: "Initial understanding of the scope", "Desired Outcome, as jointly agreed",
+# and "Any change in the objectives and scope" have been deliberately removed so
+# the template's colored scope-box headers survive injection.
 _PLACEHOLDER_RE = re.compile(
     r"<add information here>"
     r"|<Information to be filled in[^>]*>"
@@ -85,12 +107,16 @@ _PLACEHOLDER_RE = re.compile(
     r"|\[add information here\]"
     r"|Relevant aspects of the architecture, how to deploy.*$"
     r"|Desired project outcome is to be provided by"
-    r"|If the Statement of Work is filled in separately"
-    r"|Initial understanding of the scope"
-    r"|Desired Outcome, as jointly agreed"
-    r"|Any change in the objectives and scope",
+    r"|If the Statement of Work is filled in separately",
     re.IGNORECASE,
 )
+
+# Heading title suffixes (lower-case, without leading customer name) that mark
+# headings whose FIRST run is a blank placeholder for the customer name.
+_CUSTOMER_HEADING_PREFIXES: frozenset[str] = frozenset({
+    "company profile",
+    "offboarding",
+})
 
 # Known prefixes in template runs that are immediately followed by a blank
 # customer-name run.  Ordered longest-match first to avoid short-prefix false
@@ -115,6 +141,47 @@ _CUSTOMER_PREFIX_SUFFIXES = (
     "under ",
     "The ",
 )
+
+
+def _build_para_elem(text: str, bold: bool = False) -> object:
+    """Build a ``<w:p>`` XML element containing one or more runs.
+
+    If *text* contains the :data:`_PENDING_MARKER` literal, the marker
+    segments are emitted as separate red-coloured runs so they appear in
+    red in the rendered DOCX.  All other text is emitted in the normal
+    (or bold) colour.
+    """
+    new_para = OxmlElement("w:p")
+
+    def _add_run(t: str, red: bool = False) -> None:
+        if not t:
+            return
+        r = OxmlElement("w:r")
+        if bold or red:
+            rPr = OxmlElement("w:rPr")
+            if bold:
+                rPr.append(OxmlElement("w:b"))
+            if red:
+                c = OxmlElement("w:color")
+                c.set(qn("w:val"), "FF0000")
+                rPr.append(c)
+            r.append(rPr)
+        t_elem = OxmlElement("w:t")
+        t_elem.text = t
+        t_elem.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        r.append(t_elem)
+        new_para.append(r)
+
+    if _PENDING_MARKER in text:
+        parts = text.split(_PENDING_MARKER)
+        for idx, part in enumerate(parts):
+            _add_run(part, red=False)
+            if idx < len(parts) - 1:
+                _add_run(_PENDING_MARKER, red=True)
+    else:
+        _add_run(text, red=False)
+
+    return new_para
 
 
 class DocumentBuilder:
@@ -224,7 +291,31 @@ class DocumentBuilder:
                     continue  # not a blank run
 
                 if i == 0:
-                    continue  # skip leading blank runs — no preceding context
+                    # Special case: leading blank run in a heading whose title
+                    # (formed by joining all SUBSEQUENT runs) is a known
+                    # "customer-prefixed" heading (e.g. " Company Profile").
+                    # Fill it with the customer name only when the paragraph
+                    # text does not already contain the customer name.
+                    if not self.customer_name:
+                        continue
+                    if self.customer_name in para_text:
+                        continue  # already substituted — skip
+                    rest_text = "".join(run_texts[1:]).strip().lower()
+                    if rest_text in _CUSTOMER_HEADING_PREFIXES:
+                        # Preserve a space separator between customer name and
+                        # the heading title that follows in the next run.
+                        fill = self.customer_name
+                        if (
+                            i + 1 < len(r_elems)
+                            and not run_texts[i + 1].startswith(" ")
+                        ):
+                            fill = self.customer_name + " "
+                        _set_text(r, fill)
+                        run_texts[i] = fill
+                        logger.debug(
+                            "doc_builder.customer_name_injected_heading rest=%r", rest_text
+                        )
+                    continue  # no preceding context for suffix-based fill
 
                 # Guard: if the following run already starts with the
                 # customer name, this blank run is adjacent to the real
@@ -319,6 +410,7 @@ class DocumentBuilder:
             self._insert_diagram_images(doc, diagram_images)
 
         self._apply_heading1_page_breaks(doc)
+        self._suppress_blank_heading_page_breaks(doc)
         doc.save(str(output_path))
         logger.info("Saved generated SoW document: %s", output_path)
         return output_name
@@ -458,6 +550,33 @@ class DocumentBuilder:
                 pPr.append(pbr)
         logger.info("doc_builder.heading1_page_breaks_applied")
 
+    @staticmethod
+    def _suppress_blank_heading_page_breaks(doc: Document) -> None:
+        """Remove pageBreakBefore from empty heading paragraphs.
+
+        ``_apply_heading1_page_breaks`` adds ``<w:pageBreakBefore/>`` to every
+        H1 except the first.  When the template contains structurally empty H1
+        paragraphs (text == "") these produce a completely blank page.  This
+        pass removes the ``<w:pageBreakBefore/>`` element from any heading
+        paragraph whose visible text is empty or whitespace-only.
+        """
+        removed = 0
+        for para in doc.paragraphs:
+            if DocumentBuilder._get_heading_level(para) is None:
+                continue
+            if para.text.strip():
+                continue  # non-empty heading — leave its page-break alone
+            p_elem = para._element
+            pPr = p_elem.find(qn("w:pPr"))
+            if pPr is None:
+                continue
+            pbr = pPr.find(qn("w:pageBreakBefore"))
+            if pbr is not None:
+                pPr.remove(pbr)
+                removed += 1
+        if removed:
+            logger.info("doc_builder.blank_heading_page_breaks_suppressed count=%d", removed)
+
     # ------------------------------------------------------------------
     # Formatted block injection (bold labels + bullet sentences)
     # ------------------------------------------------------------------
@@ -483,21 +602,6 @@ class DocumentBuilder:
         """
         blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
 
-        def _make_para(text: str, bold: bool = False) -> object:
-            new_para = OxmlElement("w:p")
-            new_run = OxmlElement("w:r")
-            if bold:
-                rPr = OxmlElement("w:rPr")
-                bold_elem = OxmlElement("w:b")
-                rPr.append(bold_elem)
-                new_run.append(rPr)
-            new_text = OxmlElement("w:t")
-            new_text.text = text
-            new_text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
-            new_run.append(new_text)
-            new_para.append(new_run)
-            return new_para
-
         for block in reversed(blocks):
             lines = block.split("\n", 1)
             first_line = lines[0].strip().rstrip(":")
@@ -505,16 +609,18 @@ class DocumentBuilder:
             is_label = first_line.lower() in _SUB_TOPIC_LABELS
 
             if is_label and body:
-                # Insert body as bullet sentences (reversed so first ends up first)
+                # Insert body as bullet sentences (reversed so first ends up first).
+                # Each bullet line is built with _build_para_elem so that any
+                # PENDING TO REVIEW markers are rendered in red.
                 sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(body) if s.strip()]
                 if not sentences:
                     sentences = [body]
                 for sentence in reversed(sentences):
-                    anchor_elem.addnext(_make_para("– " + sentence))
+                    anchor_elem.addnext(_build_para_elem("– " + sentence))
                 # Insert bold label after anchor (so it comes before the bullets)
-                anchor_elem.addnext(_make_para(first_line, bold=True))
+                anchor_elem.addnext(_build_para_elem(first_line, bold=True))
             else:
-                anchor_elem.addnext(_make_para(block))
+                anchor_elem.addnext(_build_para_elem(block))
 
     # ------------------------------------------------------------------
     # Table data filling
@@ -910,18 +1016,21 @@ class DocumentBuilder:
             if _PLACEHOLDER_RE.search(para.text):
                 body.remove(para._element)
 
-        # Determine the injection anchor: prefer inserting *after* the first
-        # real non-placeholder, non-sub-heading paragraph in the section
-        # (i.e., after the template's intro sentence) so the LLM content
-        # follows naturally after it rather than being prepended before it.
+        # Determine the injection anchor.
+        # For _INJECT_AT_TOP_SECTIONS (e.g. SCOPE), inject immediately after the
+        # heading so that LLM content appears BEFORE any surviving template
+        # paragraphs (e.g. the coloured scope-box headers).
+        # For all other sections, advance the anchor past any template intro
+        # text so LLM content is appended after it.
         anchor_elem = paragraphs[heading_idx]._element
-        for i in range(heading_idx + 1, next_heading_idx):
-            para = paragraphs[i]
-            lvl = self._get_heading_level(para)
-            if lvl is not None:
-                break  # hit a sub-heading — keep current anchor
-            if para.text.strip() and not _PLACEHOLDER_RE.search(para.text):
-                anchor_elem = para._element  # advance anchor past intro para(s)
+        if section_name.upper() not in _INJECT_AT_TOP_SECTIONS:
+            for i in range(heading_idx + 1, next_heading_idx):
+                para = paragraphs[i]
+                lvl = self._get_heading_level(para)
+                if lvl is not None:
+                    break  # hit a sub-heading — keep current anchor
+                if para.text.strip() and not _PLACEHOLDER_RE.search(para.text):
+                    anchor_elem = para._element  # advance anchor past intro para(s)
 
         if section_name.upper() in _LABELED_FORMAT_SECTIONS:
             self._inject_formatted_blocks_after_element(anchor_elem, content)
@@ -931,11 +1040,19 @@ class DocumentBuilder:
         return True
 
     def _append_section(self, doc: Document, section_name: str, content: str) -> None:
-        """Fallback: append section at end of document."""
-        doc.add_heading(section_name.title(), level=1)
-        for block in content.split("\n\n"):
-            if block.strip():
-                doc.add_paragraph(block.strip())
+        """Fallback: append section at end of document.
+
+        For sections in :data:`_LABELED_FORMAT_SECTIONS` (e.g. ARCHITECT REVIEW),
+        the formatted bold-label + bullet injection is used so that sub-topic
+        structure is preserved even when the section is not found in the template.
+        """
+        heading = doc.add_heading(section_name.title(), level=1)
+        if section_name.upper() in _LABELED_FORMAT_SECTIONS:
+            self._inject_formatted_blocks_after_element(heading._element, content)
+        else:
+            for block in content.split("\n\n"):
+                if block.strip():
+                    doc.add_paragraph(block.strip())
 
     def _find_heading_in_tables(self, doc: Document, keyword: str):
         """Search table cells for a heading paragraph matching keyword.
@@ -956,18 +1073,13 @@ class DocumentBuilder:
     def _inject_blocks_after_element(anchor_elem, content: str) -> None:
         """Insert content paragraphs as next siblings of anchor_elem.
 
-        Inserts in reverse order so that block[0] ends up immediately after anchor_elem.
+        Inserts in reverse order so that block[0] ends up immediately after
+        anchor_elem.  Uses :func:`_build_para_elem` so that any
+        ``PENDING TO REVIEW`` markers within the text are rendered in red.
         """
         content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
         for block in reversed(content_blocks):
-            new_para = OxmlElement("w:p")
-            new_run = OxmlElement("w:r")
-            new_text = OxmlElement("w:t")
-            new_text.text = block
-            new_text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
-            new_run.append(new_text)
-            new_para.append(new_run)
-            anchor_elem.addnext(new_para)
+            anchor_elem.addnext(_build_para_elem(block))
 
     @staticmethod
     def _is_heading_style(para) -> bool:

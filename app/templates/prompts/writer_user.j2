@@ -5,6 +5,34 @@ Maintain the structure, tone, and level of detail shown in the reference example
 Be specific: name the actual components, services, and objectives from the project data.
 Do not repeat the section heading. Do not add sub-headings with markdown syntax.
 
+{% if section_name == 'PROJECT PARTICIPANTS' %}
+Write a single introductory sentence (maximum 20 words) describing the project team composition.
+For example: "The following table lists the key participants involved in this engagement."
+Do NOT write more than one sentence. Do NOT list names — the table captures those.
+{% endif %}
+
+{% if section_name == 'IN SCOPE APPLICATION' %}
+Write 1-2 brief sentences (maximum 40 words total) introducing the application in scope.
+State what the application does and its current deployment context.
+Do NOT write a long description — the table below captures the details.
+{% endif %}
+
+{% if section_name == 'PROJECT OVERVIEW' %}
+Write 1-2 introductory sentences (maximum 50 words total) summarising the engagement at a high level:
+who the customer is, what the application does, and the migration objective.
+Do NOT write multiple paragraphs. Do NOT list deliverables.
+Do NOT use these words: jointly, joint, Oracle Labs, Oracle team.
+{% endif %}
+
+{% if section_name == 'SCOPE' %}
+Write 1-2 introductory sentences (maximum 40 words total) for the Scope section.
+Briefly state what this engagement delivers to the customer at a high level.
+Do NOT list deliverables — those are captured in the structured scope boxes that follow.
+Strict rules:
+- Do NOT use the words: joint, jointly, Oracle, Oracle Labs, Oracle team, common understanding.
+- Do NOT add markdown headings or bullet list syntax.
+{% endif %}
+
 {% if section_name == 'ARCHITECTURE COMPONENTS' %}
 Group content using EXACTLY these sub-topic labels (plain-text, each on its own line):
 Networking | Security | Compute | Storage and Databases | DevOps and Management
@@ -18,40 +46,55 @@ Diagram-identified components (JSON):
 {% else %}
 Provide 2-4 sentences per sub-topic with project-specific configuration details.
 {% endif %}
-{% elif section_name == 'IMPLEMENTATION DETAILS' %}
+{% endif %}
+
+{% if section_name == 'IMPLEMENTATION DETAILS' %}
 Group content into the following sub-topics, each introduced with a plain-text label on its own line:
 Networking | Security | Compute | Storage and Databases | DevOps and Management
-Provide 2-4 sentences per sub-topic with project-specific configuration details.
-{% endif %}
 
-{% if section_name == 'PROJECT OVERVIEW' %}
-Write an executive summary (3-4 paragraphs) covering:
-(1) who the customer is and what the application does,
-(2) what platform it currently runs on and why migration is needed,
-(3) the target platform (OCI) and the high-level business objectives.
-Do NOT list deliverables here — those are captured in the separate Scope section.
-Do NOT use these words: jointly, joint, Oracle Labs, Oracle team.
-{% endif %}
+For each sub-topic, list the specific target configuration settings that will be applied:
+exact versions, CIDR ranges, instance shapes/OCPUs/memory, service options, and key parameters.
+Draw values from the project data JSON wherever possible.
 
-{% if section_name == 'SCOPE' %}
-Write a professional, customer-focused scope proposal for this engagement.
-List 4-6 specific deliverables as short numbered prose paragraphs.
-Each deliverable should describe what will be delivered to the customer team.
-Use future tense: "will be deployed", "will be configured", "will be migrated".
-Be specific — name actual services, components, and technologies from the project data.
-Strict rules:
-- Do NOT use the words: joint, jointly, Oracle, Oracle Labs, Oracle team, common understanding.
-- Do NOT reference Oracle or Oracle's responsibilities — this is the customer's scope.
-- Do NOT add markdown headings or bullet list syntax.
+For any configuration value that is NOT specified or cannot be inferred from the project data,
+write the exact literal string: PENDING TO REVIEW
+(this marker will be highlighted in red in the document for easy identification).
+
+Provide 3-5 settings per sub-topic. Be concrete — avoid generic filler sentences.
 {% endif %}
 
 {% if section_name == 'CURRENT STATE ARCHITECTURE DESCRIPTION' %}
-Write a detailed technical description of the current state architecture (4-6 paragraphs).
-Cover: compute platform, container orchestration, networking topology, data storage,
-CI/CD pipeline, observability tooling, and high-availability / DR pattern.
-Be specific about component and service names drawn from the project data JSON
-(especially architecture_analysis.current if present).
-Do NOT use headings. Do NOT add markdown syntax. Prose only.
+Write a concise, high-level technical description of the current state architecture as BULLET POINTS.
+Use "–" as the bullet prefix. Maximum 8 bullets. Each bullet covers one key component or capability.
+Focus on: compute platform, container/VM setup, networking, databases, CI/CD, observability, HA/DR.
+Draw facts from architecture_analysis.current in the project data JSON if present.
+Do NOT write prose paragraphs. Bullet points only. No markdown headings.
+{% endif %}
+
+{% if section_name == 'ARCHITECT REVIEW' %}
+Write a structured architect review for this auto-generated Statement of Work.
+Use EXACTLY these four sub-topic labels (plain-text, each on its own line):
+Generation Quality | Data Gaps | Next Steps | Recommendations
+
+Generation Quality
+Assess what was generated well (e.g. architecture components, implementation details) and
+identify any sections that appear incomplete or based on insufficient project data.
+Limit to 2-3 concise bullet sentences.
+
+Data Gaps
+List specific project data fields that are missing, ambiguous, or could not be inferred:
+e.g. CIDR ranges, database version, instance sizing, application tier details.
+Each gap as a short bullet (use "–" prefix). Maximum 6 bullets.
+
+Next Steps
+List concrete actions the architect must take to complete this document before review:
+e.g. "Fill CIDR ranges in Implementation Details", "Confirm DB tier sizing with customer".
+Number each step (1., 2., ...). Maximum 5 steps.
+
+Recommendations
+Provide 2-3 technical or process recommendations for this engagement:
+e.g. architecture trade-offs, risk mitigation, governance suggestions.
+Write in professional, concise language. This section is internal — not customer-facing.
 {% endif %}
 
 Project data JSON:

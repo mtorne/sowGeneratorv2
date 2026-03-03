@@ -48,6 +48,13 @@ CANONICAL_STRUCTURE = [
     "SECURITY",
     "HIGH AVAILABILITY",
     "MANAGED SERVICES CONFIGURATION",
+    # ── Architect Review ───────────────────────────────────────────────────
+    # Final section providing generation quality feedback, unknown data gaps,
+    # next steps to complete the SoW, and recommendations.  This section is
+    # NOT in the DOCX template — it is appended at the end of the document
+    # via _append_section so the architect has a structured audit trail of
+    # what was auto-generated and what still needs manual attention.
+    "ARCHITECT REVIEW",
     # ──────────────────────────────────────────────────────────────────────
     "CLOSING FEEDBACK",
 ]
