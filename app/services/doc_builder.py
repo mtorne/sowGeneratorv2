@@ -552,30 +552,55 @@ class DocumentBuilder:
 
     @staticmethod
     def _suppress_blank_heading_page_breaks(doc: Document) -> None:
-        """Remove pageBreakBefore from empty heading paragraphs.
+        """Remove spurious page breaks that produce blank pages.
 
-        ``_apply_heading1_page_breaks`` adds ``<w:pageBreakBefore/>`` to every
-        H1 except the first.  When the template contains structurally empty H1
-        paragraphs (text == "") these produce a completely blank page.  This
-        pass removes the ``<w:pageBreakBefore/>`` element from any heading
-        paragraph whose visible text is empty or whitespace-only.
+        Two passes — both operate only on paragraphs whose visible text is
+        empty or whitespace-only (so content paragraphs are never touched):
+
+        **Pass 1 — ``<w:pageBreakBefore/>`` on empty headings.**
+        ``_apply_heading1_page_breaks`` adds this element to every H1 except
+        the first.  Empty H1 paragraphs left in the template trigger a blank
+        page because Word honours the page-break even though nothing is
+        rendered.
+
+        **Pass 2 — explicit ``<w:br w:type="page"/>`` runs in empty paragraphs.**
+        Word / template editors sometimes insert a lone page-break run inside
+        an empty Normal paragraph immediately following an empty heading,
+        compounding the blank-page problem.  Removing the ``<w:br>`` element
+        (and the now-empty run that contained it) eliminates the extra page.
         """
-        removed = 0
+        removed_pbr = 0  # pageBreakBefore on empty headings
+        removed_brk = 0  # explicit page-break runs in empty paragraphs
+
         for para in doc.paragraphs:
-            if DocumentBuilder._get_heading_level(para) is None:
-                continue
             if para.text.strip():
-                continue  # non-empty heading — leave its page-break alone
+                continue  # paragraph has visible text — leave page breaks alone
+
             p_elem = para._element
-            pPr = p_elem.find(qn("w:pPr"))
-            if pPr is None:
-                continue
-            pbr = pPr.find(qn("w:pageBreakBefore"))
-            if pbr is not None:
-                pPr.remove(pbr)
-                removed += 1
-        if removed:
-            logger.info("doc_builder.blank_heading_page_breaks_suppressed count=%d", removed)
+
+            # Pass 1: pageBreakBefore on empty headings
+            if DocumentBuilder._get_heading_level(para) is not None:
+                pPr = p_elem.find(qn("w:pPr"))
+                if pPr is not None:
+                    pbr = pPr.find(qn("w:pageBreakBefore"))
+                    if pbr is not None:
+                        pPr.remove(pbr)
+                        removed_pbr += 1
+
+            # Pass 2: explicit page-break runs in empty paragraphs
+            for r_elem in list(p_elem.findall(qn("w:r"))):
+                for br_elem in list(r_elem.findall(qn("w:br"))):
+                    if br_elem.get(qn("w:type")) == "page":
+                        r_elem.remove(br_elem)
+                        removed_brk += 1
+                # Drop the run element if it is now empty (no text, no other content)
+                if not r_elem.findall(qn("w:t")) and not r_elem.findall(qn("w:br")):
+                    p_elem.remove(r_elem)
+
+        if removed_pbr:
+            logger.info("doc_builder.blank_heading_page_breaks_suppressed count=%d", removed_pbr)
+        if removed_brk:
+            logger.info("doc_builder.blank_para_page_breaks_suppressed count=%d", removed_brk)
 
     # ------------------------------------------------------------------
     # Formatted block injection (bold labels + bullet sentences)
@@ -585,16 +610,21 @@ class DocumentBuilder:
     def _inject_formatted_blocks_after_element(anchor_elem, content: str) -> None:
         """Insert content using bold sub-topic labels and bullet-point sentences.
 
-        Used for ARCHITECTURE COMPONENTS and IMPLEMENTATION DETAILS.  The LLM
-        output for these sections looks like::
+        Used for ARCHITECTURE COMPONENTS, IMPLEMENTATION DETAILS, and ARCHITECT
+        REVIEW.  The LLM output for these sections looks like::
 
             Networking\\nDetails about the network...\\n\\nSecurity\\nDetails...
 
         Each block whose first line is a known sub-topic label (Networking, Security,
-        Compute, Storage and Databases, DevOps and Management) is formatted as:
+        Compute, Storage and Databases, DevOps and Management, Generation Quality,
+        Data Gaps, Next Steps, Recommendations) is formatted as:
 
         - A bold paragraph for the label
-        - One bullet paragraph per sentence in the body (prefix ``– ``)
+        - One bullet paragraph per item (prefix ``– ``)
+
+        Body items are split by newlines when the body is multi-line (e.g. bullet
+        lists, numbered items from Architect Review).  For single-line dense prose
+        the sentence-boundary splitter is used instead.
 
         Other blocks (e.g. introductory paragraphs) are inserted as plain paragraphs.
 
@@ -609,14 +639,26 @@ class DocumentBuilder:
             is_label = first_line.lower() in _SUB_TOPIC_LABELS
 
             if is_label and body:
-                # Insert body as bullet sentences (reversed so first ends up first).
-                # Each bullet line is built with _build_para_elem so that any
-                # PENDING TO REVIEW markers are rendered in red.
-                sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(body) if s.strip()]
+                # Split body into individual items.  When the body is multi-line
+                # (bullet lists, numbered steps) split on newlines so each item
+                # gets its own paragraph.  For dense single-line prose, fall back
+                # to the sentence-boundary splitter.
+                if "\n" in body:
+                    sentences = [s.strip() for s in body.split("\n") if s.strip()]
+                else:
+                    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(body) if s.strip()]
                 if not sentences:
                     sentences = [body]
+                # Insert bullet paragraphs in reverse so first ends up first.
+                # Each line is built with _build_para_elem so PENDING TO REVIEW
+                # markers are rendered in red.
                 for sentence in reversed(sentences):
-                    anchor_elem.addnext(_build_para_elem("– " + sentence))
+                    # Avoid double-prefixing lines that already carry a bullet
+                    # marker (e.g. "– …" from Data Gaps or "1. …" from Next Steps).
+                    prefix = "" if sentence.startswith(("–", "-", "•")) or (
+                        len(sentence) > 1 and sentence[0].isdigit() and sentence[1] in ".)"
+                    ) else "– "
+                    anchor_elem.addnext(_build_para_elem(prefix + sentence))
                 # Insert bold label after anchor (so it comes before the bullets)
                 anchor_elem.addnext(_build_para_elem(first_line, bold=True))
             else:
