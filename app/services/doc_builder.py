@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from docx import Document
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,12 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
     "CLOSING FEEDBACK":                             "closing feedback",
 }
 
+# Sections whose template body content should be fully cleared before LLM injection.
+# Use for sections that are 100% LLM-generated with no useful template intro text.
+_FULL_CLEAR_SECTIONS = frozenset({
+    "ARCHITECTURE COMPONENTS",
+})
+
 # Placeholder text patterns to remove when found inside a section
 _PLACEHOLDER_RE = re.compile(
     r"<add information here>"
@@ -43,7 +50,12 @@ _PLACEHOLDER_RE = re.compile(
     r"|<Final thoughts[^>]*>"
     r"|\[Add description here\]"
     r"|\[add information here\]"
-    r"|Relevant aspects of the architecture, how to deploy.*$",  # Implementation Details placeholder
+    r"|Relevant aspects of the architecture, how to deploy.*$"
+    r"|Desired project outcome is to be provided by"
+    r"|If the Statement of Work is filled in separately"
+    r"|Initial understanding of the scope"
+    r"|Desired Outcome, as jointly agreed"
+    r"|Any change in the objectives and scope",
     re.IGNORECASE,
 )
 
@@ -56,24 +68,20 @@ _CUSTOMER_PREFIX_SUFFIXES = (
     "to enable ",
     "available to ",
     "Oracle-",
+    "Oracle and ",              # "shared between Oracle and [customer]"
     "initial format by ",
     "granted for ",
-    "the  Oracle",          # "the [customer] Oracle Labs" — blank INSIDE run
+    "the  Oracle",              # "the [customer] Oracle Labs" — blank INSIDE run
     "under the  Oracle",
     "based on the ",
-    "under ",
-    "The ",
+    "falls under ",
     "fall under ",
     "ACE/Sales and ",
     "for the ",
     "provided by ",
+    "under ",
+    "The ",
 )
-
-# Known literal placeholder tokens to replace globally
-_LITERAL_SUBSTITUTIONS: list[tuple[str, str]] = [
-    ("Customer1", "{customer_name}"),
-    ("Project1",  "{project_name}"),
-]
 
 
 class DocumentBuilder:
@@ -102,10 +110,23 @@ class DocumentBuilder:
     def _substitute_names(self, doc: Document) -> None:
         """Replace 'Customer1' / 'Project1' placeholders with actual names.
 
-        Two passes:
-        1. Replace literal placeholder tokens in every run.
+        Operates at the XML level so that ALL paragraphs are covered,
+        including those inside text boxes (w:txbxContent) and table cells
+        which are not surfaced by doc.paragraphs.
+
+        Three passes per paragraph:
+        1. Replace literal placeholder tokens ('Customer1', 'Project1') in
+           every run's <w:t> text, with an anti-duplication check against
+           the following run.
         2. Fill blank/space-only runs that sit between context runs where
-           the customer name belongs (identified by the preceding run's suffix).
+           the customer name belongs (identified by the preceding run's
+           known suffix).  Includes a guard against filling when the next
+           run already starts with the customer name.
+        3. Collapse consecutive runs whose text equals the customer name
+           (happens when the template had both a 'Customer1' token and an
+           adjacent already-filled run).
+        4. Blank run at paragraph start (i==0): fill when the paragraph has
+           other non-empty content and does not already contain the name.
         """
         if not self.customer_name and not self.project_name:
             return
@@ -116,43 +137,104 @@ class DocumentBuilder:
         if self.project_name:
             token_map["Project1"] = self.project_name
 
-        def _process_para_runs(para) -> None:
-            # Pass 1: literal token replacement
-            for run in para.runs:
-                for token, replacement in token_map.items():
-                    if token in run.text:
-                        run.text = run.text.replace(token, replacement)
+        def _process_p_element(p_elem) -> None:
+            r_elems = p_elem.findall(qn("w:r"))
+            if not r_elems:
+                return
 
-            # Pass 2: fill blank runs that carry the customer-name placeholder.
-            # A blank run is one whose text is '' or purely whitespace.
+            def _get_t(r) -> object | None:
+                return r.find(qn("w:t"))
+
+            def _text(r) -> str:
+                t = _get_t(r)
+                return (t.text or "") if t is not None else ""
+
+            def _set_text(r, value: str) -> None:
+                t = _get_t(r)
+                if t is not None:
+                    t.text = value
+                    t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                else:
+                    new_t = OxmlElement("w:t")
+                    new_t.text = value
+                    new_t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                    r.append(new_t)
+
+            # Pass 1: literal token replacement
+            for idx, r in enumerate(r_elems):
+                for token, replacement in token_map.items():
+                    current = _text(r)
+                    if token in current:
+                        new_val = current.replace(token, replacement)
+                        # Anti-duplication: if next run already starts with
+                        # the replacement we just inserted, strip it there.
+                        if idx + 1 < len(r_elems):
+                            next_text = _text(r_elems[idx + 1])
+                            if next_text.startswith(replacement):
+                                _set_text(r_elems[idx + 1], next_text[len(replacement):])
+                        _set_text(r, new_val)
+
+            # Refresh run texts after pass 1
+            run_texts = [_text(r) for r in r_elems]
+            para_text = "".join(run_texts)
+
             if not self.customer_name:
                 return
-            runs = para.runs
-            for i, run in enumerate(runs):
-                if run.text.strip() != "":
+
+            # Pass 2: fill blank/space-only runs by context
+            for i, r in enumerate(r_elems):
+                txt = run_texts[i]
+                if txt.strip() != "":
                     continue  # not a blank run
-                if i == 0:
+
+                # Guard: if the following run already starts with the
+                # customer name, this blank run is adjacent to the real
+                # value — do not fill to avoid duplication.
+                if i + 1 < len(r_elems) and run_texts[i + 1].startswith(self.customer_name):
                     continue
-                prev_text = runs[i - 1].text
+
+                if i == 0:
+                    # Blank run at paragraph start: fill only when the
+                    # paragraph has other content and the name is absent.
+                    remaining = "".join(run_texts[1:]).strip()
+                    if remaining and self.customer_name not in para_text:
+                        _set_text(r, self.customer_name)
+                        run_texts[i] = self.customer_name
+                    continue
+
+                prev_text = run_texts[i - 1]
                 for suffix in _CUSTOMER_PREFIX_SUFFIXES:
                     if prev_text.endswith(suffix):
-                        run.text = self.customer_name
+                        _set_text(r, self.customer_name)
+                        run_texts[i] = self.customer_name
                         logger.debug(
                             "doc_builder.customer_name_injected run_idx=%d prev_suffix=%r",
-                            i,
-                            suffix,
+                            i, suffix,
                         )
                         break
 
-        # Body paragraphs
-        for para in doc.paragraphs:
-            _process_para_runs(para)
-        # Table cells
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs:
-                        _process_para_runs(para)
+            # Pass 3: collapse consecutive customer-name runs
+            # (template had two adjacent placeholder runs for the same slot)
+            last_name_idx: int | None = None
+            run_texts = [_text(r) for r in r_elems]  # refresh
+            for i, r in enumerate(r_elems):
+                txt = run_texts[i]
+                if txt == self.customer_name:
+                    if last_name_idx is not None:
+                        _set_text(r, "")  # clear the duplicate
+                        logger.debug("doc_builder.customer_name_deduped run_idx=%d", i)
+                    else:
+                        last_name_idx = i
+                elif txt.strip():
+                    last_name_idx = None  # reset on non-empty, non-name text
+
+        # Iterate over EVERY <w:p> in the document, including those inside
+        # text boxes (w:txbxContent), headers, footers, and table cells.
+        for p_elem in doc.element.body.iter(qn("w:p")):
+            try:
+                _process_p_element(p_elem)
+            except Exception:
+                logger.debug("doc_builder.substitute_names_para_error", exc_info=True)
 
         logger.info(
             "doc_builder.names_substituted customer=%r project=%r",
@@ -250,7 +332,29 @@ class DocumentBuilder:
                 break
 
         body = doc.element.body
+        content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
 
+        # ── Full-clear sections ──────────────────────────────────────────
+        # For sections that are 100% LLM-generated, remove ALL non-heading
+        # template paragraphs between the section heading and the next
+        # heading, then inject the LLM content immediately after the heading.
+        if section_name.upper() in _FULL_CLEAR_SECTIONS:
+            for i in range(heading_idx + 1, next_heading_idx):
+                para = paragraphs[i]
+                if self._get_heading_level(para) is None:
+                    try:
+                        body.remove(para._element)
+                    except Exception:
+                        pass
+            anchor_elem = paragraphs[heading_idx]._element
+            self._inject_blocks_after_element(anchor_elem, content)
+            logger.info(
+                "doc_builder.section_injected section=%s blocks=%d (full_clear)",
+                section_name, len(content_blocks),
+            )
+            return True
+
+        # ── Normal sections ──────────────────────────────────────────────
         # Remove placeholder paragraphs (but not sub-headings or real content)
         for i in range(heading_idx + 1, next_heading_idx):
             para = paragraphs[i]
@@ -271,7 +375,6 @@ class DocumentBuilder:
                 anchor_elem = para._element  # advance anchor past intro para(s)
 
         self._inject_blocks_after_element(anchor_elem, content)
-        content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
         logger.info("doc_builder.section_injected section=%s blocks=%d", section_name, len(content_blocks))
         return True
 
