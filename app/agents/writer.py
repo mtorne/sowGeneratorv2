@@ -3,10 +3,37 @@
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 from typing import Any
 
 from app.services.llm import call_llm
 from app.services.rag_service import SectionChunk
+
+logger = logging.getLogger(__name__)
+
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "templates" / "prompts"
+
+
+def _jinja_env():  # type: ignore[return]
+    """Return a Jinja2 environment pointed at the prompts directory.
+
+    Import is deferred so a missing jinja2 install raises at call time
+    (with a clear message) rather than crashing the entire app at startup.
+    """
+    try:
+        from jinja2 import Environment, FileSystemLoader, StrictUndefined
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "jinja2 is required but not installed — run: pip install jinja2"
+        ) from exc
+
+    return Environment(
+        loader=FileSystemLoader(str(_PROMPTS_DIR)),
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
 
 
 class WriterAgent:
@@ -25,24 +52,23 @@ class WriterAgent:
             for idx, chunk in enumerate(rag_context or [], start=1)
         )
 
-        system_parts = [
-            "You are a senior Oracle Cloud Solution Architect writing a formal Statement of Work. "
-            "Follow the established enterprise tone and structure. Reuse phrasing when appropriate "
-            "but adapt to project specifics. Do not invent services not present in project data.",
-        ]
-        if disallowed_services:
-            system_parts.append(
-                "IMPORTANT: You MUST NOT mention, reference, or recommend the following OCI services "
-                f"anywhere in your output: {', '.join(disallowed_services)}. "
-                "If any of these services appear in reference examples, ignore them entirely."
-            )
-        system_prompt = " ".join(system_parts)
+        env = _jinja_env()
 
-        user_prompt = (
-            f"Write section: {section_name}\n"
-            "Maintain similar structure as reference examples.\n\n"
-            f"Project data JSON:\n{json.dumps(context, ensure_ascii=False)}\n\n"
-            f"Retrieved similar section examples:\n{examples or 'No retrieved examples available.'}\n\n"
-            "Output only the section content."
+        system_prompt = env.get_template("writer_system.j2").render(
+            disallowed_services=disallowed_services or [],
+        ).strip()
+
+        user_prompt = env.get_template("writer_user.j2").render(
+            section_name=section_name,
+            context_json=json.dumps(context, ensure_ascii=False),
+            examples=examples,
+        ).strip()
+
+        logger.debug(
+            "writer.render_prompts section=%s system_len=%d user_len=%d",
+            section_name,
+            len(system_prompt),
+            len(user_prompt),
         )
+
         return call_llm(system_prompt=system_prompt, user_prompt=user_prompt).strip()

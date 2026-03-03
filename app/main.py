@@ -23,7 +23,7 @@ from app.agents.structure_controller import StructureController
 from app.agents.writer import WriterAgent
 from app.services.doc_builder import DocumentBuilder
 from app.services.oci_multimodal import OCIClient
-from app.services.rag_service import SectionAwareRAGService
+from app.services.rag_service import SectionAwareRAGService, SectionChunk
 
 logging.basicConfig(
     level=logging.INFO,
@@ -136,6 +136,22 @@ def _sanitize_validation_value(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_sanitize_validation_value(v) for v in value]
     return value
+
+
+def _load_fallback_context(project_root: Path, section: str) -> SectionChunk | None:
+    """Load a static fallback template as a synthetic SectionChunk.
+
+    Returns None if no fallback file exists for the given section so callers
+    can degrade gracefully.  Fallback files live under
+    ``app/templates/fallback_sections/<section_slug>.md``.
+    """
+    slug = section.lower().replace(" ", "_") + ".md"
+    fallback_path = project_root / "templates" / "fallback_sections" / slug
+    if not fallback_path.exists():
+        return None
+    text = fallback_path.read_text(encoding="utf-8").strip()
+    logger.info("workflow.fallback_loaded section=%s file=%s", section, slug)
+    return SectionChunk(section=section, text=text)
 
 
 @app.exception_handler(RequestValidationError)
@@ -335,10 +351,18 @@ async def generate_sow(
                         logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
                         section_content = "[ERROR: No relevant documents found - cannot generate this section]"
                     else:
-                        logger.warning(
-                            "section=%s ZERO_CHUNKS - generating from context only (no RAG examples)",
-                            section,
-                        )
+                        fallback = _load_fallback_context(project_root, section)
+                        if fallback:
+                            logger.warning(
+                                "section=%s ZERO_CHUNKS - using static fallback as synthetic RAG example",
+                                section,
+                            )
+                            rag_context = [fallback]
+                        else:
+                            logger.warning(
+                                "section=%s ZERO_CHUNKS - generating from context only (no RAG examples)",
+                                section,
+                            )
                         section_content = writer.write_section(
                             section_name=section,
                             context=context,
