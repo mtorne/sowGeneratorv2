@@ -741,7 +741,9 @@ class DocumentBuilder:
                         break
                     cell = data_row.cells[ci]
                     cell_text = cell.text.strip()
-                    if "date" in header and (not cell_text or _DATE_PH.match(cell_text)):
+                    if "date" in header:
+                        # Always overwrite — template may ship with a real-looking
+                        # date (e.g. "01-10-2025") that _DATE_PH wouldn't match.
                         self._set_cell_text(cell, today_str)
                         logger.info("doc_builder.version_history_date_set date=%s", today_str)
                     elif "revised by" in header and not cell_text:
