@@ -102,8 +102,15 @@ def patch(template_path: Path) -> None:
 
     doc = Document(str(template_path))
 
+    # ── Build paragraph list once — reuse for all searches ───────────────────
+    # doc.paragraphs is a property that creates fresh wrapper objects on each
+    # call, so objects from one iteration are not `is`-equal to those in a
+    # separately constructed list.  Build the list a single time and do every
+    # search against the same list to avoid the ValueError from .index().
+    paragraphs = list(doc.paragraphs)
+
     # ── Idempotency check ────────────────────────────────────────────────────
-    existing_texts = {p.text.strip().lower() for p in doc.paragraphs if _is_heading(p)}
+    existing_texts = {p.text.strip().lower() for p in paragraphs if _is_heading(p)}
     already_present = [s for s in SUBSECTIONS if s.lower() in existing_texts]
     if already_present:
         print(f"Already present (skipping): {already_present}")
@@ -113,10 +120,15 @@ def patch(template_path: Path) -> None:
         return
 
     # ── Find parent heading ──────────────────────────────────────────────────
+    # Track index during the search to avoid .index() — Paragraph.__eq__ in
+    # some python-docx versions does not guarantee identity equality even
+    # when the object came from the same list, causing spurious ValueError.
     parent_para = None
-    for para in doc.paragraphs:
+    parent_idx = -1
+    for idx, para in enumerate(paragraphs):
         if _is_heading(para) and PARENT_KEYWORD in para.text.lower():
             parent_para = para
+            parent_idx = idx
             break
 
     if parent_para is None:
@@ -129,15 +141,10 @@ def patch(template_path: Path) -> None:
     print(f"Parent heading found: [{_heading_level(parent_para)}] {parent_para.text!r}")
 
     # ── Find the insert-before anchor ────────────────────────────────────────
-    # We want to insert the new Heading 2 paragraphs immediately after the
-    # parent heading (before any existing next sibling heading).
-    #
-    # Strategy: walk doc.paragraphs from parent_para onwards and find the
-    # first heading at level ≤ parent level that is NOT the parent itself.
-    # New subsections go in before that next peer heading (or at end of section).
+    # Walk paragraphs from parent onwards and find the first heading at level
+    # ≤ parent level (i.e. next peer or ancestor).  New subsections are
+    # inserted before that heading so they sit inside the parent section.
     parent_level = _heading_level(parent_para) or 1
-    paragraphs = list(doc.paragraphs)
-    parent_idx = paragraphs.index(parent_para)
 
     anchor_elem = None  # insert-before this element; None means insert after parent
     for para in paragraphs[parent_idx + 1:]:
@@ -190,7 +197,7 @@ if __name__ == "__main__":
         path = Path(sys.argv[1])
     else:
         # Default: repo-relative path used in production
-        path = Path(__file__).resolve().parent.parent / "app" / "sow_template.docx"
+        path = Path(__file__).resolve().parent.parent / "app" / "templates" / "sow_template.docx"
 
     if not path.exists():
         print(f"ERROR: Template not found at {path}")
