@@ -190,7 +190,7 @@ if __name__ == "__main__":
         path = Path(sys.argv[1])
     else:
         # Default: repo-relative path used in production
-        path = Path(__file__).resolve().parent.parent / "app" / "sow_template.docx"
+        path = Path(__file__).resolve().parent.parent / "app" / "templates" / "sow_template.docx"
 
     if not path.exists():
         print(f"ERROR: Template not found at {path}")
