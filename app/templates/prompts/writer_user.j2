@@ -6,9 +6,10 @@ Be specific: name the actual components, services, and objectives from the proje
 Do not repeat the section heading. Do not add sub-headings with markdown syntax.
 
 {% if section_name == 'PROJECT PARTICIPANTS' %}
-Write a single introductory sentence (maximum 20 words) describing the project team composition.
-For example: "The following table lists the key participants involved in this engagement."
-Do NOT write more than one sentence. Do NOT list names — the table captures those.
+Output EXACTLY ONE sentence — no more, no fewer.
+That sentence must introduce the table that follows without listing any names or roles.
+Example (do not copy verbatim): "The following table lists the key participants involved in this engagement."
+Hard limits: ≤ 20 words, ≤ 1 sentence, NO bullet points, NO line breaks, NO additional paragraphs.
 {% endif %}
 
 {% if section_name == 'IN SCOPE APPLICATION' %}
@@ -61,6 +62,36 @@ write the exact literal string: PENDING TO REVIEW
 (this marker will be highlighted in red in the document for easy identification).
 
 Provide 3-5 settings per sub-topic. Be concrete — avoid generic filler sentences.
+{% endif %}
+
+{% if section_name == 'CURRENTLY USED TECHNOLOGY STACK' %}
+Write EXACTLY ONE introductory sentence (≤ 30 words) stating that the table below lists the customer's
+current technology stack. Do not enumerate technologies in the text — the table already does this.
+Hard limits: ≤ 1 sentence, no bullet points, no line breaks, no additional paragraphs.
+Example: "The table below outlines the technologies currently in use for this application."
+{% endif %}
+
+{% if section_name == 'OCI SERVICE SIZING AND AMOUNTS' %}
+Write EXACTLY ONE introductory sentence (≤ 35 words) referring the reader to the table below,
+which captures the proposed OCI service sizes and quantities for this engagement.
+Do NOT enumerate services in the text — the table already does this.
+Hard limits: ≤ 1 sentence, no bullet points, no line breaks, no additional paragraphs.
+Example: "The table below details the proposed OCI services, sizing, and quantities for this migration."
+{% endif %}
+
+{% if section_name == 'STATUS AND NEXT STEPS' %}
+Write a concise status summary using EXACTLY two groups of bullet points.
+
+First group header (plain text, on its own line): Completed
+List what has already been delivered or achieved. Use "– " as the bullet prefix.
+Maximum 4 bullets. Each bullet ≤ 15 words.
+
+Second group header (plain text, on its own line): Pending
+List outstanding actions or open items. Use "– " as the bullet prefix.
+Maximum 4 bullets. Each bullet ≤ 15 words.
+
+Hard rules: no prose paragraphs, no markdown headings (#), no other sections.
+Draw facts from the project data JSON (architecture_analysis, sections already written, etc.).
 {% endif %}
 
 {% if section_name == 'CURRENT STATE ARCHITECTURE DESCRIPTION' %}
