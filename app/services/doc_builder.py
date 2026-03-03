@@ -53,6 +53,9 @@ _FULL_CLEAR_SECTIONS = frozenset({
     # "Desired outcome agreed with Oracle") must survive so users can fill them.
     # The Description H3 sub-section has only generic placeholder intro text.
     "CURRENT STATE ARCHITECTURE DESCRIPTION",
+    # STATUS AND NEXT STEPS has only generic template intro text ("Current status
+    # and what needs to happen next…") — replace it entirely with the LLM output.
+    "STATUS AND NEXT STEPS",
 })
 
 # Sections where LLM content should be injected RIGHT AFTER the heading,
@@ -68,6 +71,8 @@ _LABELED_FORMAT_SECTIONS = frozenset({
     "IMPLEMENTATION DETAILS",
     # Architect review uses the same label+bullet format for its sub-sections.
     "ARCHITECT REVIEW",
+    # Status and next steps uses Completed / Pending labels + bullet lines.
+    "STATUS AND NEXT STEPS",
 })
 
 # Known sub-topic label set for LABELED_FORMAT_SECTIONS
@@ -84,6 +89,9 @@ _SUB_TOPIC_LABELS = frozenset({
     "data gaps",
     "next steps",
     "recommendations",
+    # Status and Next Steps sub-sections
+    "completed",
+    "pending",
 })
 
 # Regex to split prose into sentences at ". " followed by an uppercase letter
@@ -568,7 +576,23 @@ class DocumentBuilder:
         an empty Normal paragraph immediately following an empty heading,
         compounding the blank-page problem.  Removing the ``<w:br>`` element
         (and the now-empty run that contained it) eliminates the extra page.
+
+        IMPORTANT: paragraphs that contain inline images have ``para.text == ""``
+        but their runs hold ``<w:drawing>`` elements.  We must never touch those
+        runs — only runs that are truly devoid of any visible content.
         """
+        # Tags that represent real content inside a run.  A run carrying any of
+        # these must NOT be deleted, even if it has no plain text.
+        _CONTENT_RUN_TAGS = {
+            qn("w:t"),        # text
+            qn("w:br"),       # line / page break
+            qn("w:drawing"),  # inline image / shape
+            qn("w:pict"),     # legacy VML picture
+            qn("w:object"),   # embedded OLE object
+            qn("w:sym"),      # symbol glyph
+            qn("w:tab"),      # tab character
+        }
+
         removed_pbr = 0  # pageBreakBefore on empty headings
         removed_brk = 0  # explicit page-break runs in empty paragraphs
 
@@ -576,7 +600,10 @@ class DocumentBuilder:
             if para.text.strip():
                 continue  # paragraph has visible text — leave page breaks alone
 
+            # Skip paragraphs that contain images / drawings (para.text is "" for those)
             p_elem = para._element
+            if p_elem.findall(f".//{qn('w:drawing')}") or p_elem.findall(f".//{qn('w:pict')}"):
+                continue
 
             # Pass 1: pageBreakBefore on empty headings
             if DocumentBuilder._get_heading_level(para) is not None:
@@ -593,8 +620,9 @@ class DocumentBuilder:
                     if br_elem.get(qn("w:type")) == "page":
                         r_elem.remove(br_elem)
                         removed_brk += 1
-                # Drop the run element if it is now empty (no text, no other content)
-                if not r_elem.findall(qn("w:t")) and not r_elem.findall(qn("w:br")):
+                # Drop the run element only if it has no meaningful content at all
+                has_content = any(child.tag in _CONTENT_RUN_TAGS for child in r_elem)
+                if not has_content:
                     p_elem.remove(r_elem)
 
         if removed_pbr:
