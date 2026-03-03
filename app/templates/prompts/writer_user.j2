@@ -1,5 +1,20 @@
-Write section: {{ section_name }}
-Maintain similar structure as reference examples.
+Write the body content for section: {{ section_name }}
+
+Use the project data and reference examples below to produce accurate, project-specific prose.
+Maintain the structure, tone, and level of detail shown in the reference examples.
+Be specific: name the actual components, services, and objectives from the project data.
+Do not repeat the section heading. Do not add sub-headings with markdown syntax.
+
+{% if section_name in ('ARCHITECTURE COMPONENTS', 'IMPLEMENTATION DETAILS') %}
+Group content into the following sub-topics, each introduced with a plain-text label on its own line:
+Networking | Security | Compute | Storage and Databases | DevOps and Management
+Provide 2-4 sentences per sub-topic with project-specific configuration details.
+{% endif %}
+
+{% if section_name == 'PROJECT OVERVIEW' %}
+Include: (1) executive summary of the migration/project objective, (2) current state summary,
+(3) desired outcomes from the customer perspective, and (4) jointly-agreed deliverables.
+{% endif %}
 
 Project data JSON:
 {{ context_json }}
@@ -7,4 +22,4 @@ Project data JSON:
 Retrieved similar section examples:
 {{ examples if examples else 'No retrieved examples available.' }}
 
-Output only the section content.
+Output only the section body content. Do not add a title or heading line.
