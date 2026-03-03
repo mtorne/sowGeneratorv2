@@ -24,7 +24,12 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
     "COMPANY PROFILE":                              "company profile",
     "IN SCOPE APPLICATION":                         "in scope application",
     "PROJECT OVERVIEW":                             "project overview",
+    # "Scope" H3 lives inside Project Overview H1.
+    # Prefix "=" means exact-match (avoids matching "In Scope Application").
+    "SCOPE":                                        "=scope",
     "CURRENT STATE ARCHITECTURE":                   "current state architecture",
+    # H3 sub-section "Current State Architecture - Description"
+    "CURRENT STATE ARCHITECTURE DESCRIPTION":       "current state architecture - description",
     "CURRENTLY USED TECHNOLOGY STACK":              "currently used technology",
     "OCI SERVICE SIZING AND AMOUNTS":               "oci service sizing",
     "FUTURE STATE ARCHITECTURE":                    "future state architecture",
@@ -41,6 +46,10 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
 # Use for sections that are 100% LLM-generated with no useful template intro text.
 _FULL_CLEAR_SECTIONS = frozenset({
     "ARCHITECTURE COMPONENTS",
+    # Scope is written as a clean deliverables proposal — no template text needed.
+    "SCOPE",
+    # The Description H3 sub-section has only generic placeholder intro text.
+    "CURRENT STATE ARCHITECTURE DESCRIPTION",
 })
 
 # Sections whose LLM output uses sub-topic labels (Networking, Security, Compute …)
@@ -547,14 +556,19 @@ class DocumentBuilder:
 
         Actions performed:
         - Version History: today's date when Revision Date cell is blank/placeholder.
-        - Company Profile: legal name, industry from project context.
+        - Company Profile: legal name, country, industry from project context.
         - In Scope Application: application name, general description from context.
+        - Application Details (General Aspects): arch type, languages, tech stack.
+        - Database Tier: product, sizing, OS, scalability, availability, backup, security.
+        - Application Tier: product, sizing, OS, features.
+        - OCI Service Sizing / BOM: rows from inferred_metadata.oci_bom.
         - Acceptance Criteria: sample criteria for an OCI deployment project.
         - All tables: replace ``DD-MM-YYYY`` date placeholders with em-dash.
         """
         today_str = datetime.date.today().strftime("%d-%m-%Y")
         _DATE_PH = re.compile(r"^D[D\-]+M[M\-]+Y+$", re.IGNORECASE)
         ctx = project_context or {}
+        meta = ctx.get("inferred_metadata") or {}
 
         for table in doc.tables:
             if not table.rows:
@@ -599,10 +613,22 @@ class DocumentBuilder:
                     if not current or current == " ":
                         if "legal name" in label:
                             self._set_cell_text(val_cell, self.customer_name)
+                        elif "country" in label:
+                            country = meta.get("country") or ""
+                            if country:
+                                self._set_cell_text(val_cell, country)
                         elif "industry" in label or "selling" in label:
-                            industry = ctx.get("industry") or ""
+                            industry = (
+                                meta.get("industry")
+                                or ctx.get("industry")
+                                or ""
+                            )
                             if industry:
                                 self._set_cell_text(val_cell, industry)
+                        elif "description" in label or "company" in label:
+                            desc = meta.get("company_description") or ""
+                            if desc:
+                                self._set_cell_text(val_cell, desc)
                 logger.info("doc_builder.company_profile_filled")
                 continue
 
@@ -624,8 +650,126 @@ class DocumentBuilder:
                         if scope:
                             self._set_cell_text(val_cell, scope)
                     elif "running on" in label and not current:
-                        self._set_cell_text(val_cell, "On-premises → OCI (Oracle Cloud Infrastructure)")
+                        platform = ctx.get("cloud") or ""
+                        val = (
+                            f"{platform} → OCI (Oracle Cloud Infrastructure)"
+                            if platform and platform.upper() not in {"OCI", "ORACLE"}
+                            else "OCI (Oracle Cloud Infrastructure)"
+                        )
+                        self._set_cell_text(val_cell, val)
                 logger.info("doc_builder.in_scope_application_filled")
+                continue
+
+            # ── Application Details (General Aspects) ─────────────────
+            # Detected by first header = "general aspects".
+            if "general aspects" in h0:
+                _APP_DETAIL_MAP = {
+                    "application architecture": "app_architecture_type",
+                    "development language":     "development_languages",
+                    "hardware dependencies":    "hardware_dependencies",
+                    "used technologies":        "used_technologies",
+                }
+                for row in table.rows[1:]:  # skip header row
+                    if len(row.cells) < 2:
+                        continue
+                    label = row.cells[0].text.strip().lower()
+                    val_cell = row.cells[1]
+                    if val_cell.text.strip():
+                        continue  # already has content
+                    for key_fragment, meta_key in _APP_DETAIL_MAP.items():
+                        if key_fragment in label:
+                            value = meta.get(meta_key) or ""
+                            if value:
+                                self._set_cell_text(val_cell, value)
+                            break
+                logger.info("doc_builder.app_details_filled")
+                continue
+
+            # ── Database Tier ──────────────────────────────────────────
+            # Detected by first header = "database tier".
+            if "database tier" in h0:
+                _DB_MAP = {
+                    "product, edition, version":    "db_product_edition",
+                    "server sizing":                "db_server_sizing",
+                    "requirements":                 "db_os_requirements",
+                    "size and growth":              "db_size_and_growth",
+                    "scalability":                  "db_scalability",
+                    "availability":                 "db_availability",
+                    "backup":                       "db_backup",
+                    "security":                     "db_security",
+                }
+                # Row 0 is merged header; Row 1 is sub-header "Relevant Aspects / Details"
+                for row in table.rows[2:]:
+                    if len(row.cells) < 2:
+                        continue
+                    label = row.cells[0].text.strip().lower()
+                    val_cell = row.cells[1]
+                    if val_cell.text.strip():
+                        continue
+                    for key_fragment, meta_key in _DB_MAP.items():
+                        if key_fragment in label:
+                            value = meta.get(meta_key) or ""
+                            if value:
+                                self._set_cell_text(val_cell, value)
+                            break
+                logger.info("doc_builder.database_tier_filled")
+                continue
+
+            # ── Application Tier ───────────────────────────────────────
+            # Detected by first header = "application tier".
+            if "application tier" in h0:
+                _APP_TIER_MAP = {
+                    "product, edition, version":        "app_product_version",
+                    "server sizing":                    "app_server_sizing",
+                    "hardware dependencies":            "hardware_dependencies",
+                    "os and dependencies":              "app_os_dependencies",
+                    "required functionality":           "app_required_features",
+                }
+                for row in table.rows[2:]:
+                    if len(row.cells) < 2:
+                        continue
+                    label = row.cells[0].text.strip().lower()
+                    val_cell = row.cells[1]
+                    if val_cell.text.strip():
+                        continue
+                    for key_fragment, meta_key in _APP_TIER_MAP.items():
+                        if key_fragment in label:
+                            value = meta.get(meta_key) or ""
+                            if value:
+                                self._set_cell_text(val_cell, value)
+                            break
+                logger.info("doc_builder.app_tier_filled")
+                continue
+
+            # ── OCI Service Sizing / Bill of Materials ─────────────────
+            # Detected by first header = "oci service name".
+            if "oci service name" in h0:
+                bom: list[dict] = meta.get("oci_bom") or []
+                if bom:
+                    # Overwrite placeholder rows first, then add more if needed
+                    placeholder_rows = [
+                        r for r in table.rows[1:]
+                        if r.cells[0].text.strip().lower().startswith("service")
+                    ]
+                    for ri, entry in enumerate(bom):
+                        if ri < len(placeholder_rows):
+                            row = placeholder_rows[ri]
+                        else:
+                            row = table.add_row()
+                        cells = row.cells
+                        if len(cells) >= 1:
+                            self._set_cell_text(cells[0], entry.get("service", ""))
+                        if len(cells) >= 2:
+                            self._set_cell_text(cells[1], entry.get("sizing_unit", ""))
+                        if len(cells) >= 3:
+                            self._set_cell_text(cells[2], entry.get("amount", ""))
+                        if len(cells) >= 4:
+                            self._set_cell_text(cells[3], entry.get("comments", ""))
+                    # Blank out any remaining placeholder rows that weren't used
+                    for row in placeholder_rows[len(bom):]:
+                        for cell in row.cells:
+                            self._set_cell_text(cell, "")
+                    logger.info("doc_builder.bom_filled entries=%d", len(bom))
                 continue
 
             # ── Acceptance Criteria ────────────────────────────────────
@@ -670,7 +814,14 @@ class DocumentBuilder:
 
     def _inject_section(self, doc: Document, section_name: str, content: str) -> bool:
         """Find heading in template, remove placeholder paragraphs, inject content."""
-        keyword = SECTION_HEADING_KEYWORDS.get(section_name.upper(), section_name.lower())
+        raw_keyword = SECTION_HEADING_KEYWORDS.get(section_name.upper(), section_name.lower())
+
+        # A keyword prefixed with "=" requires an EXACT heading-text match
+        # (case-insensitive) rather than a substring search.  Used for short
+        # keywords like "scope" that would otherwise match longer headings.
+        exact_match = raw_keyword.startswith("=")
+        keyword = raw_keyword[1:] if exact_match else raw_keyword
+
         paragraphs = list(doc.paragraphs)
 
         # Find the matching heading paragraph (body-level paragraphs only)
@@ -679,7 +830,12 @@ class DocumentBuilder:
         for i, para in enumerate(paragraphs):
             if not self._is_heading_style(para):
                 continue
-            if keyword.lower() in para.text.lower():
+            para_text = para.text.strip().lower()
+            if exact_match:
+                matched = (para_text == keyword.lower())
+            else:
+                matched = (keyword.lower() in para_text)
+            if matched:
                 heading_idx = i
                 heading_level = self._get_heading_level(para) or 1
                 break
