@@ -120,10 +120,15 @@ def patch(template_path: Path) -> None:
         return
 
     # ── Find parent heading ──────────────────────────────────────────────────
+    # Track index during the search to avoid .index() — Paragraph.__eq__ in
+    # some python-docx versions does not guarantee identity equality even
+    # when the object came from the same list, causing spurious ValueError.
     parent_para = None
-    for para in paragraphs:
+    parent_idx = -1
+    for idx, para in enumerate(paragraphs):
         if _is_heading(para) and PARENT_KEYWORD in para.text.lower():
             parent_para = para
+            parent_idx = idx
             break
 
     if parent_para is None:
@@ -140,7 +145,6 @@ def patch(template_path: Path) -> None:
     # ≤ parent level (i.e. next peer or ancestor).  New subsections are
     # inserted before that heading so they sit inside the parent section.
     parent_level = _heading_level(parent_para) or 1
-    parent_idx = paragraphs.index(parent_para)
 
     anchor_elem = None  # insert-before this element; None means insert after parent
     for para in paragraphs[parent_idx + 1:]:
