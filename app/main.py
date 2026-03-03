@@ -252,32 +252,47 @@ async def generate_sow(
         context: dict[str, Any] = payload_model.model_dump()
 
         architecture_analysis: dict[str, Any] = {}
+        _vision_inputs: list[tuple] = []
         if current_architecture_image and current_architecture_image.filename:
-            current_bytes = await current_architecture_image.read()
-            logger.info("Swarm flow step: ArchitectureVisionAgent (current)")
-            result = architecture_vision.analyze(current_architecture_image.filename, current_bytes, "current")
-            arch_error = result.get("architecture_extraction", {}).get("error")
-            if arch_error:
-                logger.warning(
-                    "ArchitectureVisionAgent (current) failed — diagram context skipped: %s",
-                    arch_error.get("message", arch_error),
-                )
-            else:
-                architecture_analysis["current"] = result
-            await current_architecture_image.seek(0)
+            _vision_inputs.append((current_architecture_image, "current"))
         if target_architecture_image and target_architecture_image.filename:
-            target_bytes = await target_architecture_image.read()
-            logger.info("Swarm flow step: ArchitectureVisionAgent (target)")
-            result = architecture_vision.analyze(target_architecture_image.filename, target_bytes, "target")
-            arch_error = result.get("architecture_extraction", {}).get("error")
-            if arch_error:
-                logger.warning(
-                    "ArchitectureVisionAgent (target) failed — diagram context skipped: %s",
-                    arch_error.get("message", arch_error),
+            _vision_inputs.append((target_architecture_image, "target"))
+
+        if _vision_inputs:
+            _t0_vision = time.monotonic()
+            logger.info("workflow.vision_parallel_start diagrams=%d", len(_vision_inputs))
+
+            async def _run_vision(upload_file, role: str) -> tuple[str, dict[str, Any]]:
+                file_bytes = await upload_file.read()
+                await upload_file.seek(0)
+                result = await asyncio.to_thread(
+                    architecture_vision.analyze,
+                    upload_file.filename,
+                    file_bytes,
+                    role,
                 )
-            else:
-                architecture_analysis["target"] = result
-            await target_architecture_image.seek(0)
+                return role, result
+
+            vision_results = await asyncio.gather(
+                *[_run_vision(uf, role) for uf, role in _vision_inputs]
+            )
+            logger.info(
+                "workflow.vision_parallel_complete elapsed=%.1fs diagrams=%d",
+                time.monotonic() - _t0_vision,
+                len(_vision_inputs),
+            )
+
+            for role, result in vision_results:
+                arch_error = result.get("architecture_extraction", {}).get("error")
+                if arch_error:
+                    logger.warning(
+                        "ArchitectureVisionAgent (%s) failed — diagram context skipped: %s",
+                        role,
+                        arch_error.get("message", arch_error),
+                    )
+                else:
+                    architecture_analysis[role] = result
+
         if architecture_analysis:
             context["architecture_analysis"] = architecture_analysis
 
