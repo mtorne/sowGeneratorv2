@@ -102,8 +102,15 @@ def patch(template_path: Path) -> None:
 
     doc = Document(str(template_path))
 
+    # ── Build paragraph list once — reuse for all searches ───────────────────
+    # doc.paragraphs is a property that creates fresh wrapper objects on each
+    # call, so objects from one iteration are not `is`-equal to those in a
+    # separately constructed list.  Build the list a single time and do every
+    # search against the same list to avoid the ValueError from .index().
+    paragraphs = list(doc.paragraphs)
+
     # ── Idempotency check ────────────────────────────────────────────────────
-    existing_texts = {p.text.strip().lower() for p in doc.paragraphs if _is_heading(p)}
+    existing_texts = {p.text.strip().lower() for p in paragraphs if _is_heading(p)}
     already_present = [s for s in SUBSECTIONS if s.lower() in existing_texts]
     if already_present:
         print(f"Already present (skipping): {already_present}")
@@ -114,7 +121,7 @@ def patch(template_path: Path) -> None:
 
     # ── Find parent heading ──────────────────────────────────────────────────
     parent_para = None
-    for para in doc.paragraphs:
+    for para in paragraphs:
         if _is_heading(para) and PARENT_KEYWORD in para.text.lower():
             parent_para = para
             break
@@ -129,14 +136,10 @@ def patch(template_path: Path) -> None:
     print(f"Parent heading found: [{_heading_level(parent_para)}] {parent_para.text!r}")
 
     # ── Find the insert-before anchor ────────────────────────────────────────
-    # We want to insert the new Heading 2 paragraphs immediately after the
-    # parent heading (before any existing next sibling heading).
-    #
-    # Strategy: walk doc.paragraphs from parent_para onwards and find the
-    # first heading at level ≤ parent level that is NOT the parent itself.
-    # New subsections go in before that next peer heading (or at end of section).
+    # Walk paragraphs from parent onwards and find the first heading at level
+    # ≤ parent level (i.e. next peer or ancestor).  New subsections are
+    # inserted before that heading so they sit inside the parent section.
     parent_level = _heading_level(parent_para) or 1
-    paragraphs = list(doc.paragraphs)
     parent_idx = paragraphs.index(parent_para)
 
     anchor_elem = None  # insert-before this element; None means insert after parent
