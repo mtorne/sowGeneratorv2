@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.agents.architecture_vision import ArchitectureVisionAgent
+from app.agents.metadata_inference import MetadataInferenceAgent
 from app.agents.qa import QAAgent
 from app.agents.structure_controller import StructureController
 from app.agents.writer import WriterAgent
@@ -295,6 +296,22 @@ async def generate_sow(
 
         if architecture_analysis:
             context["architecture_analysis"] = architecture_analysis
+
+        # ── Metadata inference ──────────────────────────────────────────────
+        # LLM call to extract structured customer/project/architecture metadata
+        # used to fill Company Profile, App Details, DB Tier, App Tier, and BOM
+        # tables in the DOCX.  Runs synchronously (fast, single LLM call).
+        logger.info("Swarm flow step: MetadataInferenceAgent")
+        _t0_meta = time.monotonic()
+        metadata_inference = MetadataInferenceAgent()
+        inferred_metadata = await asyncio.to_thread(metadata_inference.infer, context)
+        logger.info(
+            "workflow.metadata_inference_complete elapsed=%.1fs keys=%s bom=%d",
+            time.monotonic() - _t0_meta,
+            list(inferred_metadata.keys()),
+            len(inferred_metadata.get("oci_bom") or []),
+        )
+        context["inferred_metadata"] = inferred_metadata
 
         logger.info("Swarm flow step: ArchitectureContextBuilder")
 

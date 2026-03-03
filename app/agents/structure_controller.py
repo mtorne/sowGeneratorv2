@@ -16,7 +16,17 @@ CANONICAL_STRUCTURE = [
     "COMPANY PROFILE",
     "IN SCOPE APPLICATION",
     "PROJECT OVERVIEW",
+    # ── Scope ─────────────────────────────────────────────────────────────────
+    # Customer-focused deliverables proposal.  Injected into the "Scope" H3
+    # sub-heading inside Project Overview.  LLM writes factual deliverables
+    # with no Oracle/joint language.
+    "SCOPE",
     "CURRENT STATE ARCHITECTURE",
+    # ── Current State sub-section ─────────────────────────────────────────────
+    # H3 "Current State Architecture - Description".  Detailed component-level
+    # description written by the LLM from architecture_analysis.current data.
+    # The H1 "Current State Architecture" keeps its template intro text only.
+    "CURRENT STATE ARCHITECTURE DESCRIPTION",
     "CURRENTLY USED TECHNOLOGY STACK",
     "OCI SERVICE SIZING AND AMOUNTS",
     "FUTURE STATE ARCHITECTURE",
@@ -45,6 +55,10 @@ CANONICAL_STRUCTURE = [
 STATIC_SECTIONS = {
     "SOW VERSION HISTORY",             # always v1.0 boilerplate, no RAG value
     "COMPANY PROFILE",                 # boilerplate; human-written per engagement
+    # CURRENT STATE ARCHITECTURE is intentionally static with an empty file so
+    # the template H1-level intro text is preserved as-is.  Detailed description
+    # is handled by the separate CURRENT STATE ARCHITECTURE DESCRIPTION section.
+    "CURRENT STATE ARCHITECTURE",
     "SECURITY",                        # standard OCI security boilerplate
     # Implementation Details subsections — scope-independent boilerplate
     "HIGH AVAILABILITY",               # standard HA design patterns

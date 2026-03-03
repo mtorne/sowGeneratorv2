@@ -25,8 +25,33 @@ Provide 2-4 sentences per sub-topic with project-specific configuration details.
 {% endif %}
 
 {% if section_name == 'PROJECT OVERVIEW' %}
-Include: (1) executive summary of the migration/project objective, (2) current state summary,
-(3) desired outcomes from the customer perspective, and (4) jointly-agreed deliverables.
+Write an executive summary (3-4 paragraphs) covering:
+(1) who the customer is and what the application does,
+(2) what platform it currently runs on and why migration is needed,
+(3) the target platform (OCI) and the high-level business objectives.
+Do NOT list deliverables here — those are captured in the separate Scope section.
+Do NOT use these words: jointly, joint, Oracle Labs, Oracle team.
+{% endif %}
+
+{% if section_name == 'SCOPE' %}
+Write a professional, customer-focused scope proposal for this engagement.
+List 4-6 specific deliverables as short numbered prose paragraphs.
+Each deliverable should describe what will be delivered to the customer team.
+Use future tense: "will be deployed", "will be configured", "will be migrated".
+Be specific — name actual services, components, and technologies from the project data.
+Strict rules:
+- Do NOT use the words: joint, jointly, Oracle, Oracle Labs, Oracle team, common understanding.
+- Do NOT reference Oracle or Oracle's responsibilities — this is the customer's scope.
+- Do NOT add markdown headings or bullet list syntax.
+{% endif %}
+
+{% if section_name == 'CURRENT STATE ARCHITECTURE DESCRIPTION' %}
+Write a detailed technical description of the current state architecture (4-6 paragraphs).
+Cover: compute platform, container orchestration, networking topology, data storage,
+CI/CD pipeline, observability tooling, and high-availability / DR pattern.
+Be specific about component and service names drawn from the project data JSON
+(especially architecture_analysis.current if present).
+Do NOT use headings. Do NOT add markdown syntax. Prose only.
 {% endif %}
 
 Project data JSON:
