@@ -189,7 +189,13 @@ def download_generated_file(file_name: str) -> FileResponse:
     return FileResponse(path=str(file_path), filename=file_path.name, media_type=media_type)
 
 
-def _inject_diagram_analysis_context(section: str, section_content: str, context: dict[str, Any]) -> str:
+def _diagram_analysis_notes(section: str, context: dict[str, Any]) -> str:
+    """Build a short prose summary of diagram analysis for QA/audit logging only.
+
+    This is intentionally NOT appended to section_content that goes into the
+    DOCX — the metadata must stay out of the final document.  Call this only
+    when you need a human-readable summary for logging or the QA pass.
+    """
     architecture = context.get("architecture_analysis") if isinstance(context.get("architecture_analysis"), dict) else {}
     current = architecture.get("current") if isinstance(architecture.get("current"), dict) else None
     target = architecture.get("target") if isinstance(architecture.get("target"), dict) else None
@@ -197,29 +203,16 @@ def _inject_diagram_analysis_context(section: str, section_content: str, context
     notes: list[str] = []
     upper = section.upper()
     if "CURRENT STATE ARCHITECTURE" in upper and current:
-        notes.append(
-            f"Current diagram analyzed: file={current.get('file_name')}, format={current.get('format')}, size={current.get('size_bytes')} bytes."
-        )
         components = current.get("inferred_components") or []
         if components:
             notes.append(f"Current diagram inferred components: {', '.join(components)}.")
-        notes.append(
-            f"Current diagram analysis confidence: {current.get('analysis_confidence', 'low')}."
-        )
+        notes.append(f"Current diagram confidence: {current.get('analysis_confidence', 'low')}.")
     if "FUTURE STATE ARCHITECTURE" in upper and target:
-        notes.append(
-            f"Target diagram analyzed: file={target.get('file_name')}, format={target.get('format')}, size={target.get('size_bytes')} bytes."
-        )
         components = target.get("inferred_components") or []
         if components:
             notes.append(f"Target diagram inferred components: {', '.join(components)}.")
-        notes.append(
-            f"Target diagram analysis confidence: {target.get('analysis_confidence', 'low')}."
-        )
-
-    if not notes:
-        return section_content
-    return section_content.rstrip() + "\n\nDiagram analysis evidence:\n- " + "\n- ".join(notes)
+        notes.append(f"Target diagram confidence: {target.get('analysis_confidence', 'low')}.")
+    return " ".join(notes)
 
 
 @app.post("/generate-sow", response_model=SowOutput)
@@ -404,7 +397,11 @@ async def generate_sow(
                             ", ".join(sorted(invalid_services)),
                         )
 
-            section_content = _inject_diagram_analysis_context(section, section_content, context)
+            # Log diagram analysis notes for diagnostics — but do NOT append
+            # them to section_content; metadata must not appear in the DOCX.
+            diag_notes = _diagram_analysis_notes(section, context)
+            if diag_notes:
+                logger.debug("section=%s diagram_analysis_notes=%s", section, diag_notes)
             drafted_sections.append((section, section_content))
 
         assembled = _assemble_document(drafted_sections)
@@ -412,7 +409,11 @@ async def generate_sow(
         reviewed = qa.review_document(assembled)
 
         logger.info("Swarm flow step: DocBuilder")
-        builder = DocumentBuilder(template_path=project_root / "templates" / "sow_template.docx")
+        builder = DocumentBuilder(
+            template_path=project_root / "templates" / "sow_template.docx",
+            customer_name=context.get("client", ""),
+            project_name=context.get("project_name", ""),
+        )
         file_name = builder.build(sections=drafted_sections, output_dir=project_root)
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name, markdown_file=markdown_name)

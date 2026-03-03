@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Flat canonical order used for generation and DocBuilder injection.
-# "Implementation Details and Configuration Settings" in the DOCX template is
-# the Heading 1 parent; the sections below it are injected as Heading 2
-# subsections (see scripts/patch_template_headings.py).
+# Sections marked STATIC in STATIC_SECTIONS are injected verbatim from
+# app/templates/static_sections/<slug>.md.  All other sections are written
+# by WriterAgent using RAG context + architecture vision analysis.
 CANONICAL_STRUCTURE = [
     "SOW VERSION HISTORY",
     "STATUS AND NEXT STEPS",
@@ -21,27 +21,34 @@ CANONICAL_STRUCTURE = [
     "OCI SERVICE SIZING AND AMOUNTS",
     "FUTURE STATE ARCHITECTURE",
     "ARCHITECTURE DEPLOYMENT OVERVIEW",
-    "SECURITY",
-    # ── Implementation Details subsections ───────────────────────────────────
-    # These map to Heading 2 paragraphs inside the "Implementation Details and
-    # Configuration Settings" Heading 1 in the DOCX template.
+    # ── Future State sub-sections ──────────────────────────────────────────
+    # "Architecture Components" is a Heading 3 inside Future State Architecture
+    # that should enumerate project-specific components grouped by category
+    # (Networking, Compute, Storage, Security, DevOps & Management).
+    "ARCHITECTURE COMPONENTS",
+    # ── Implementation Details ─────────────────────────────────────────────
+    # "Implementation Details and Configuration Settings" in the DOCX template
+    # is the Heading 3 parent. The LLM writes the introductory body content;
+    # HA and MC are static Heading 4 subsections patched in by
+    # scripts/patch_template_headings.py.
     # Optional subsections (e.g. BACKUP, DISASTER RECOVERY) can be added here
-    # when they are in scope; add a matching static template file in
-    # app/templates/static_sections/ and a Heading 2 entry in the DOCX template
-    # via scripts/patch_template_headings.py (SUBSECTIONS list).
+    # when in scope; add a matching static_section .md and Heading 4 in the
+    # DOCX template via the patch script's SUBSECTIONS list.
+    "IMPLEMENTATION DETAILS",
+    "SECURITY",
     "HIGH AVAILABILITY",
     "MANAGED SERVICES CONFIGURATION",
-    # ─────────────────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────────
     "CLOSING FEEDBACK",
 ]
 
 STATIC_SECTIONS = {
     "SOW VERSION HISTORY",             # always v1.0 boilerplate, no RAG value
-    "COMPANY PROFILE",                 # ✅ already static
-    "SECURITY",                        # ✅ already static
-    # Implementation Details subsections — boilerplate text, scope-independent
-    "HIGH AVAILABILITY",               # ✅ already static
-    "MANAGED SERVICES CONFIGURATION",  # ✅ already static
+    "COMPANY PROFILE",                 # boilerplate; human-written per engagement
+    "SECURITY",                        # standard OCI security boilerplate
+    # Implementation Details subsections — scope-independent boilerplate
+    "HIGH AVAILABILITY",               # standard HA design patterns
+    "MANAGED SERVICES CONFIGURATION",  # standard OKE/managed services config
     "CLOSING FEEDBACK",                # post-project human fill, no RAG value
 }
 

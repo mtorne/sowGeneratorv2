@@ -37,13 +37,15 @@ class SectionAwareRAGService:
         "SOW VERSION HISTORY":              "document version history revision changes amendments",
         "STATUS AND NEXT STEPS":            "project status milestones next steps actions timeline",
         "PROJECT PARTICIPANTS":             "project team roles responsibilities stakeholders contacts",
-        "IN SCOPE APPLICATION":            "applications systems in scope workloads included services",
+        "IN SCOPE APPLICATION":             "applications systems in scope workloads included services",
         "PROJECT OVERVIEW":                 "project objectives goals background executive summary",
         "CURRENT STATE ARCHITECTURE":       "current architecture existing infrastructure on-premise legacy systems",
         "CURRENTLY USED TECHNOLOGY STACK":  "current technology stack software tools databases middleware",
         "OCI SERVICE SIZING AND AMOUNTS":   "OCI cloud service sizing compute storage license quantities",
         "FUTURE STATE ARCHITECTURE":        "target architecture future state cloud migration OCI design",
         "ARCHITECTURE DEPLOYMENT OVERVIEW": "deployment architecture network topology zones regions availability",
+        "ARCHITECTURE COMPONENTS":          "architecture components services networking compute storage security DevOps OCI",
+        "IMPLEMENTATION DETAILS":           "implementation configuration settings networking security compute storage DevOps provisioning",
         "CLOSING FEEDBACK":                 "closing remarks acceptance criteria success metrics feedback",
     }
 
