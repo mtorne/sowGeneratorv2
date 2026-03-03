@@ -440,6 +440,7 @@ async def generate_sow(
             sections=drafted_sections,
             output_dir=project_root,
             diagram_images=diagram_image_bytes or None,
+            project_context=context,
         )
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name, markdown_file=markdown_name)

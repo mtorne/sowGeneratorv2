@@ -43,6 +43,27 @@ _FULL_CLEAR_SECTIONS = frozenset({
     "ARCHITECTURE COMPONENTS",
 })
 
+# Sections whose LLM output uses sub-topic labels (Networking, Security, Compute …)
+# and should be formatted with bold labels + sentence-level bullet points.
+_LABELED_FORMAT_SECTIONS = frozenset({
+    "ARCHITECTURE COMPONENTS",
+    "IMPLEMENTATION DETAILS",
+})
+
+# Known sub-topic label set for LABELED_FORMAT_SECTIONS
+_SUB_TOPIC_LABELS = frozenset({
+    "networking",
+    "security",
+    "compute",
+    "storage and databases",
+    "devops and management",
+    "storage",
+    "databases",
+})
+
+# Regex to split prose into sentences at ". " followed by an uppercase letter
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
+
 # Placeholder text patterns to remove when found inside a section
 _PLACEHOLDER_RE = re.compile(
     r"<add information here>"
@@ -184,25 +205,22 @@ class DocumentBuilder:
             if not self.customer_name:
                 return
 
-            # Pass 2: fill blank/space-only runs by context
+            # Pass 2: fill blank/space-only runs by context suffix
+            # Only fills a blank run when the PRECEDING run ends with one of
+            # the known prefix strings — this avoids false positives on blank
+            # runs inside headings, table cells, and other non-name slots.
             for i, r in enumerate(r_elems):
                 txt = run_texts[i]
                 if txt.strip() != "":
                     continue  # not a blank run
 
+                if i == 0:
+                    continue  # skip leading blank runs — no preceding context
+
                 # Guard: if the following run already starts with the
                 # customer name, this blank run is adjacent to the real
                 # value — do not fill to avoid duplication.
                 if i + 1 < len(r_elems) and run_texts[i + 1].startswith(self.customer_name):
-                    continue
-
-                if i == 0:
-                    # Blank run at paragraph start: fill only when the
-                    # paragraph has other content and the name is absent.
-                    remaining = "".join(run_texts[1:]).strip()
-                    if remaining and self.customer_name not in para_text:
-                        _set_text(r, self.customer_name)
-                        run_texts[i] = self.customer_name
                     continue
 
                 prev_text = run_texts[i - 1]
@@ -250,6 +268,7 @@ class DocumentBuilder:
         sections: list[tuple[str, str]],
         output_dir: Path,
         diagram_images: dict[str, bytes] | None = None,
+        project_context: dict | None = None,
     ) -> str:
         """Inject sections into template headings and save DOCX.
 
@@ -259,6 +278,9 @@ class DocumentBuilder:
             diagram_images: Optional mapping of ``"current"`` / ``"target"`` → raw
                 PNG/JPG bytes of the architecture diagram images to embed in the
                 corresponding placeholder boxes in the template.
+            project_context: Full project context dict from the API request (client,
+                project_name, scope, industry, services …).  Used to populate
+                Company Profile, In Scope Application, and Acceptance Criteria tables.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         output_name = f"output_{uuid4().hex}.docx"
@@ -266,7 +288,7 @@ class DocumentBuilder:
 
         doc = self._load_or_create_template()
         self._substitute_names(doc)
-        self._fill_project_tables(doc)
+        self._fill_project_tables(doc, project_context=project_context)
 
         if self.template_path.exists():
             for section_name, content in sections:
@@ -287,6 +309,7 @@ class DocumentBuilder:
         if diagram_images:
             self._insert_diagram_images(doc, diagram_images)
 
+        self._apply_heading1_page_breaks(doc)
         doc.save(str(output_path))
         logger.info("Saved generated SoW document: %s", output_path)
         return output_name
@@ -397,34 +420,153 @@ class DocumentBuilder:
                 )
 
     # ------------------------------------------------------------------
-    # Table data filling  (Feature C)
+    # Page break before every Heading 1
     # ------------------------------------------------------------------
 
-    def _fill_project_tables(self, doc: Document) -> None:
+    @staticmethod
+    def _apply_heading1_page_breaks(doc: Document) -> None:
+        """Add a pageBreakBefore property to every Heading 1 except the first.
+
+        This ensures each major section starts on a fresh page without the engineer
+        having to manually insert page breaks after every generation run.
+        """
+        first_h1_seen = False
+        for para in doc.paragraphs:
+            if not (para.style.name == "Heading 1" or
+                    (para.style.name.startswith("Heading") and
+                     DocumentBuilder._get_heading_level(para) == 1)):
+                continue
+            if not first_h1_seen:
+                first_h1_seen = True
+                continue  # don't add a break before the very first H1
+            p_elem = para._element
+            pPr = p_elem.find(qn("w:pPr"))
+            if pPr is None:
+                pPr = OxmlElement("w:pPr")
+                p_elem.insert(0, pPr)
+            if pPr.find(qn("w:pageBreakBefore")) is None:
+                pbr = OxmlElement("w:pageBreakBefore")
+                pPr.append(pbr)
+        logger.info("doc_builder.heading1_page_breaks_applied")
+
+    # ------------------------------------------------------------------
+    # Formatted block injection (bold labels + bullet sentences)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _inject_formatted_blocks_after_element(anchor_elem, content: str) -> None:
+        """Insert content using bold sub-topic labels and bullet-point sentences.
+
+        Used for ARCHITECTURE COMPONENTS and IMPLEMENTATION DETAILS.  The LLM
+        output for these sections looks like::
+
+            Networking\\nDetails about the network...\\n\\nSecurity\\nDetails...
+
+        Each block whose first line is a known sub-topic label (Networking, Security,
+        Compute, Storage and Databases, DevOps and Management) is formatted as:
+
+        - A bold paragraph for the label
+        - One bullet paragraph per sentence in the body (prefix ``– ``)
+
+        Other blocks (e.g. introductory paragraphs) are inserted as plain paragraphs.
+
+        Inserts in reverse order so that block[0] ends up immediately after anchor_elem.
+        """
+        blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
+
+        def _make_para(text: str, bold: bool = False) -> object:
+            new_para = OxmlElement("w:p")
+            new_run = OxmlElement("w:r")
+            if bold:
+                rPr = OxmlElement("w:rPr")
+                bold_elem = OxmlElement("w:b")
+                rPr.append(bold_elem)
+                new_run.append(rPr)
+            new_text = OxmlElement("w:t")
+            new_text.text = text
+            new_text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+            new_run.append(new_text)
+            new_para.append(new_run)
+            return new_para
+
+        for block in reversed(blocks):
+            lines = block.split("\n", 1)
+            first_line = lines[0].strip().rstrip(":")
+            body = lines[1].strip() if len(lines) > 1 else ""
+            is_label = first_line.lower() in _SUB_TOPIC_LABELS
+
+            if is_label and body:
+                # Insert body as bullet sentences (reversed so first ends up first)
+                sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(body) if s.strip()]
+                if not sentences:
+                    sentences = [body]
+                for sentence in reversed(sentences):
+                    anchor_elem.addnext(_make_para("– " + sentence))
+                # Insert bold label after anchor (so it comes before the bullets)
+                anchor_elem.addnext(_make_para(first_line, bold=True))
+            else:
+                anchor_elem.addnext(_make_para(block))
+
+    # ------------------------------------------------------------------
+    # Table data filling
+    # ------------------------------------------------------------------
+
+    # Sample acceptance criteria for an OCI cloud migration / deployment project.
+    _SAMPLE_ACCEPTANCE_CRITERIA: list[tuple[str, str]] = [
+        (
+            "Deployment completeness",
+            "All in-scope application components are deployed and operational on OCI "
+            "(OKE workloads, MySQL Database System, Object Storage, Load Balancer).",
+        ),
+        (
+            "Performance baseline",
+            "Application response time remains within agreed SLA targets under "
+            "production-representative load; no degradation vs. on-premises baseline.",
+        ),
+        (
+            "High availability",
+            "Failover behaviour validated: single-node failure does not cause "
+            "service outage; uptime target ≥ 99.9 % over the acceptance window.",
+        ),
+        (
+            "Security posture",
+            "WAF policy active, Vault-managed secrets in use, network segmentation "
+            "verified, and no critical/high findings in the post-deployment security review.",
+        ),
+        (
+            "CI/CD pipeline",
+            "End-to-end automated build and deployment pipeline executes successfully "
+            "on OCI; rollback procedure documented and tested.",
+        ),
+    ]
+
+    def _fill_project_tables(
+        self, doc: Document, project_context: dict | None = None
+    ) -> None:
         """Fill structured table data in the DOCX template.
 
         Actions performed:
-        - Version History table: sets today's date in the Revision Date column of
-          the first data row when the cell is blank or contains a placeholder.
-        - Any table: replaces ``DD-MM-YYYY`` date placeholder strings with an
-          em-dash (``—``) so the document looks clean; engineers fill real dates.
+        - Version History: today's date when Revision Date cell is blank/placeholder.
+        - Company Profile: legal name, industry from project context.
+        - In Scope Application: application name, general description from context.
+        - Acceptance Criteria: sample criteria for an OCI deployment project.
+        - All tables: replace ``DD-MM-YYYY`` date placeholders with em-dash.
         """
         today_str = datetime.date.today().strftime("%d-%m-%Y")
-        _DATE_PLACEHOLDER = re.compile(r"^D[D\-]+M[M\-]+Y+$", re.IGNORECASE)
+        _DATE_PH = re.compile(r"^D[D\-]+M[M\-]+Y+$", re.IGNORECASE)
+        ctx = project_context or {}
 
         for table in doc.tables:
             if not table.rows:
                 continue
 
-            # Build header map: column index → normalised header text
-            header_row = table.rows[0]
             headers = [
                 cell.text.strip().lower().replace("\n", " ")
-                for cell in header_row.cells
+                for cell in table.rows[0].cells
             ]
+            h0 = headers[0] if headers else ""
 
-            # ── Version History table ──────────────────────────────────
-            # Detect by "revision date" or ("version" + "revised by") headers.
+            # ── Version History ────────────────────────────────────────
             is_version_table = (
                 "revision date" in headers
                 or ("version #" in headers and "revised by" in headers)
@@ -437,22 +579,77 @@ class DocumentBuilder:
                         break
                     cell = data_row.cells[ci]
                     cell_text = cell.text.strip()
-                    if "date" in header and (
-                        not cell_text or _DATE_PLACEHOLDER.match(cell_text)
-                    ):
+                    if "date" in header and (not cell_text or _DATE_PH.match(cell_text)):
                         self._set_cell_text(cell, today_str)
-                        logger.info(
-                            "doc_builder.version_history_date_set date=%s", today_str
-                        )
+                        logger.info("doc_builder.version_history_date_set date=%s", today_str)
                     elif "revised by" in header and not cell_text:
                         self._set_cell_text(cell, "Oracle Labs")
                         logger.info("doc_builder.version_history_author_set")
-                continue  # skip the DD-MM-YYYY pass for version table (already handled)
+                continue  # DD-MM-YYYY pass handled above
+
+            # ── Company Profile ────────────────────────────────────────
+            # Detected by "legal name" appearing in the first column headers.
+            if any("legal name" in h for h in headers):
+                for row in table.rows:
+                    label = row.cells[0].text.strip().lower() if row.cells else ""
+                    val_cell = row.cells[1] if len(row.cells) > 1 else None
+                    if val_cell is None:
+                        continue
+                    current = val_cell.text.strip()
+                    if not current or current == " ":
+                        if "legal name" in label:
+                            self._set_cell_text(val_cell, self.customer_name)
+                        elif "industry" in label or "selling" in label:
+                            industry = ctx.get("industry") or ""
+                            if industry:
+                                self._set_cell_text(val_cell, industry)
+                logger.info("doc_builder.company_profile_filled")
+                continue
+
+            # ── In Scope Application ───────────────────────────────────
+            # Detected by first header = "application name".
+            if "application name" in h0:
+                for row in table.rows:
+                    label = row.cells[0].text.strip().lower() if row.cells else ""
+                    val_cell = row.cells[1] if len(row.cells) > 1 else None
+                    if val_cell is None:
+                        continue
+                    current = val_cell.text.strip()
+                    if "application name" in label:
+                        # Always overwrite to fix the Customer1Project1 concatenation
+                        app_name = f"{self.customer_name}: {self.project_name}"
+                        self._set_cell_text(val_cell, app_name.strip(": "))
+                    elif "general description" in label and not current:
+                        scope = ctx.get("scope") or ""
+                        if scope:
+                            self._set_cell_text(val_cell, scope)
+                    elif "running on" in label and not current:
+                        self._set_cell_text(val_cell, "On-premises → OCI (Oracle Cloud Infrastructure)")
+                logger.info("doc_builder.in_scope_application_filled")
+                continue
+
+            # ── Acceptance Criteria ────────────────────────────────────
+            # Detected by "acceptance criteria" in col 1 of the header row.
+            if len(headers) > 1 and "acceptance criteria" in headers[1]:
+                data_rows = table.rows[1:]  # skip header row
+                for ri, (capability, description) in enumerate(self._SAMPLE_ACCEPTANCE_CRITERIA):
+                    if ri >= len(data_rows):
+                        break
+                    row = data_rows[ri]
+                    if len(row.cells) >= 2:
+                        self._set_cell_text(row.cells[0], capability)
+                        self._set_cell_text(row.cells[1], description)
+                        if len(row.cells) >= 3:
+                            self._set_cell_text(row.cells[2], "Pending")
+                        if len(row.cells) >= 4:
+                            self._set_cell_text(row.cells[3], "—")
+                logger.info("doc_builder.acceptance_criteria_filled")
+                continue
 
             # ── General DD-MM-YYYY placeholder sweep ──────────────────
             for row in table.rows[1:]:
                 for cell in row.cells:
-                    if _DATE_PLACEHOLDER.match(cell.text.strip()):
+                    if _DATE_PH.match(cell.text.strip()):
                         self._set_cell_text(cell, "\u2014")  # em-dash
 
         logger.info("doc_builder.project_tables_filled")
@@ -538,10 +735,15 @@ class DocumentBuilder:
                     except Exception:
                         pass
             anchor_elem = paragraphs[heading_idx]._element
-            self._inject_blocks_after_element(anchor_elem, content)
+            _use_formatted = section_name.upper() in _LABELED_FORMAT_SECTIONS
+            if _use_formatted:
+                self._inject_formatted_blocks_after_element(anchor_elem, content)
+            else:
+                self._inject_blocks_after_element(anchor_elem, content)
             logger.info(
-                "doc_builder.section_injected section=%s blocks=%d (full_clear)",
+                "doc_builder.section_injected section=%s blocks=%d (full_clear%s)",
                 section_name, len(content_blocks),
+                ",formatted" if _use_formatted else "",
             )
             return True
 
@@ -565,7 +767,10 @@ class DocumentBuilder:
             if para.text.strip() and not _PLACEHOLDER_RE.search(para.text):
                 anchor_elem = para._element  # advance anchor past intro para(s)
 
-        self._inject_blocks_after_element(anchor_elem, content)
+        if section_name.upper() in _LABELED_FORMAT_SECTIONS:
+            self._inject_formatted_blocks_after_element(anchor_elem, content)
+        else:
+            self._inject_blocks_after_element(anchor_elem, content)
         logger.info("doc_builder.section_injected section=%s blocks=%d", section_name, len(content_blocks))
         return True
 
