@@ -110,11 +110,28 @@ Draw facts from the project data JSON (architecture_analysis, sections already w
 {% endif %}
 
 {% if section_name == 'CURRENT STATE ARCHITECTURE DESCRIPTION' %}
-Write a concise, high-level technical description of the current state architecture as BULLET POINTS.
-Use "–" as the bullet prefix. Maximum 8 bullets. Each bullet covers one key component or capability.
-Focus on: compute platform, container/VM setup, networking, databases, CI/CD, observability, HA/DR.
+Write a structured, hierarchical description of the current state architecture using BULLET POINTS ONLY.
+
+Indentation rules — follow exactly (the renderer uses leading spaces to set the indent level):
+  "– text"       ← L1 bullet: no leading spaces, dash prefix
+  "  – text"     ← L2 sub-bullet: exactly 2 leading spaces then dash prefix
+  "    – text"   ← L3 sub-bullet: exactly 4 leading spaces then dash prefix
+
+Structure by major service or layer (L1), with specific configuration details as sub-bullets (L2/L3).
+Maximum 6 L1 bullets. Each L1 may have 2–4 L2 sub-bullets. Use L3 only for the most critical detail.
+Focus areas: compute platform, container/VM setup, networking, databases, CI/CD, observability, HA/DR.
 Draw facts from architecture_analysis.current in the project data JSON if present.
-Do NOT write prose paragraphs. Bullet points only. No markdown headings.
+
+Do NOT write prose paragraphs, headings, or numbered lists. Bullet points only.
+
+Example format (2–3 levels):
+– Google Kubernetes Engine (GKE)
+  – Autopilot mode across us-central1 (3 availability zones)
+  – Horizontal Pod Autoscaler enabled for all workloads
+– Cloud SQL (PostgreSQL 15)
+  – High-availability with synchronous standby replica
+  – Daily automated backups with 7-day point-in-time retention
+    – Backups stored in multi-region Cloud Storage bucket
 {% endif %}
 
 {% if section_name == 'MANAGED SERVICES CONFIGURATION' %}

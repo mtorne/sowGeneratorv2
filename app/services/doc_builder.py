@@ -79,6 +79,13 @@ _LABELED_FORMAT_SECTIONS = frozenset({
     "STATUS AND NEXT STEPS",
 })
 
+# Sections whose LLM output uses hierarchical bullet lines (L1/L2/L3 indentation).
+# Each newline-separated line becomes its own paragraph; leading spaces determine
+# the indent level: 0 → L1 (0 twips), 2 spaces → L2 (360 twips), 4+ → L3 (720 twips).
+_HIERARCHICAL_BULLET_SECTIONS = frozenset({
+    "CURRENT STATE ARCHITECTURE DESCRIPTION",
+})
+
 # Known sub-topic label set for LABELED_FORMAT_SECTIONS
 _SUB_TOPIC_LABELS = frozenset({
     "networking",
@@ -192,6 +199,50 @@ def _build_para_elem(text: str, bold: bool = False) -> object:
                 _add_run(_PENDING_MARKER, red=True)
     else:
         _add_run(text, red=False)
+
+    return new_para
+
+
+def _build_indented_para_elem(text: str, left_twips: int = 0) -> object:
+    """Build a ``<w:p>`` with optional left indentation.
+
+    Like :func:`_build_para_elem` but supports hierarchical indentation for
+    bullet lists.  The *left_twips* value is applied as ``<w:ind w:left>``.
+    ``PENDING TO REVIEW`` markers are rendered in red, same as _build_para_elem.
+    """
+    new_para = OxmlElement("w:p")
+
+    if left_twips:
+        pPr = OxmlElement("w:pPr")
+        ind = OxmlElement("w:ind")
+        ind.set(qn("w:left"), str(left_twips))
+        pPr.append(ind)
+        new_para.insert(0, pPr)
+
+    def _add_run(t: str, red: bool = False) -> None:
+        if not t:
+            return
+        r = OxmlElement("w:r")
+        if red:
+            rPr = OxmlElement("w:rPr")
+            c = OxmlElement("w:color")
+            c.set(qn("w:val"), "FF0000")
+            rPr.append(c)
+            r.append(rPr)
+        t_elem = OxmlElement("w:t")
+        t_elem.text = t
+        t_elem.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        r.append(t_elem)
+        new_para.append(r)
+
+    if _PENDING_MARKER in text:
+        parts = text.split(_PENDING_MARKER)
+        for idx, part in enumerate(parts):
+            _add_run(part, red=False)
+            if idx < len(parts) - 1:
+                _add_run(_PENDING_MARKER, red=True)
+    else:
+        _add_run(text)
 
     return new_para
 
@@ -784,12 +835,20 @@ class DocumentBuilder:
             br_run.append(br_inner)
             p_elem.append(br_run)
 
-            # One run per line of content
+            # One run per line of content.
+            # Explicitly set color=000000 on every injected run so the text is
+            # always black, regardless of the paragraph's inherited colour
+            # (scope box paragraphs often carry a non-black rPr colour).
             for line in box_text.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
                 r_elem = OxmlElement("w:r")
+                rPr = OxmlElement("w:rPr")
+                clr = OxmlElement("w:color")
+                clr.set(qn("w:val"), "000000")
+                rPr.append(clr)
+                r_elem.append(rPr)
                 t_elem = OxmlElement("w:t")
                 t_elem.text = line
                 t_elem.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
@@ -863,6 +922,33 @@ class DocumentBuilder:
                 anchor_elem.addnext(_build_para_elem(first_line, bold=True))
             else:
                 anchor_elem.addnext(_build_para_elem(block))
+
+    @staticmethod
+    def _inject_hierarchical_bullets_after_element(anchor_elem, content: str) -> None:
+        """Inject hierarchical bullet content as separate indented paragraphs.
+
+        Splits *content* on newlines.  Each non-empty line becomes its own
+        ``<w:p>`` element inserted after *anchor_elem*.  Leading whitespace
+        determines the indentation level:
+
+        * 0 leading spaces  → L1 (``left=0`` twips)
+        * 2 leading spaces  → L2 (``left=360`` twips ≈ quarter-inch)
+        * 4+ leading spaces → L3 (``left=720`` twips ≈ half-inch)
+
+        ``PENDING TO REVIEW`` markers are rendered in red.  Lines are inserted
+        in reverse order so that line[0] ends up immediately after *anchor_elem*.
+        """
+        all_lines = [line for line in content.split("\n") if line.strip()]
+        for line in reversed(all_lines):
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+            if indent >= 4:
+                left_twips = 720
+            elif indent >= 2:
+                left_twips = 360
+            else:
+                left_twips = 0
+            anchor_elem.addnext(_build_indented_para_elem(stripped, left_twips))
 
     # ------------------------------------------------------------------
     # Table data filling
@@ -1120,6 +1206,9 @@ class DocumentBuilder:
                         for cell in row.cells:
                             self._set_cell_text(cell, "")
                     logger.info("doc_builder.bom_filled entries=%d", len(bom))
+                # Apply visual styling regardless of whether BOM data was provided:
+                # light blue header row, dark grayish-green data rows, fix header typo.
+                self._style_bom_table(table)
                 continue
 
             # ── Acceptance Criteria ────────────────────────────────────
@@ -1161,6 +1250,77 @@ class DocumentBuilder:
             else:
                 para.add_run(text)
             return  # only touch the first paragraph
+
+    @staticmethod
+    def _set_cell_fill(cell, hex_color: str) -> None:
+        """Set the background fill colour of a table cell.
+
+        Args:
+            cell: python-docx ``_Cell`` object.
+            hex_color: Six-character hex colour string without the ``#``
+                prefix, e.g. ``"BDD7EE"`` for light blue.
+        """
+        tc = cell._tc
+        tcPr = tc.find(qn("w:tcPr"))
+        if tcPr is None:
+            tcPr = OxmlElement("w:tcPr")
+            tc.insert(0, tcPr)
+        for existing in tcPr.findall(qn("w:shd")):
+            tcPr.remove(existing)
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), hex_color)
+        tcPr.append(shd)
+
+    @staticmethod
+    def _set_cell_text_color(cell, hex_color: str, bold: bool = False) -> None:
+        """Apply text colour (and optionally bold) to every run in a table cell.
+
+        Args:
+            cell: python-docx ``_Cell`` object.
+            hex_color: Six-character hex colour string, e.g. ``"FFFFFF"``
+                for white or ``"1F3864"`` for dark navy.
+            bold: When *True*, also sets ``<w:b/>`` on each run's rPr.
+        """
+        for para in cell.paragraphs:
+            for run in para.runs:
+                r_elem = run._r
+                rPr = r_elem.find(qn("w:rPr"))
+                if rPr is None:
+                    rPr = OxmlElement("w:rPr")
+                    r_elem.insert(0, rPr)
+                for existing in rPr.findall(qn("w:color")):
+                    rPr.remove(existing)
+                clr = OxmlElement("w:color")
+                clr.set(qn("w:val"), hex_color)
+                rPr.append(clr)
+                if bold and rPr.find(qn("w:b")) is None:
+                    rPr.insert(0, OxmlElement("w:b"))
+
+    @staticmethod
+    def _style_bom_table(table) -> None:
+        """Apply OCI BOM table visual styling.
+
+        * Header row: light blue fill (``BDD7EE``), dark navy bold text
+          (``1F3864``).  Also fixes the common "Sizing Unites" header typo.
+        * Data rows: dark grayish-green fill (``2E4A35``), white text.
+        """
+        if not table.rows:
+            return
+        # ── Header row ─────────────────────────────────────────────────
+        header_row = table.rows[0]
+        for cell in header_row.cells:
+            cell_text = cell.text.strip()
+            if "sizing" in cell_text.lower() and "unit" in cell_text.lower():
+                DocumentBuilder._set_cell_text(cell, "Sizing Units (ex. vCPUs)")
+            DocumentBuilder._set_cell_fill(cell, "BDD7EE")
+            DocumentBuilder._set_cell_text_color(cell, "1F3864", bold=True)
+        # ── Data rows ──────────────────────────────────────────────────
+        for row in table.rows[1:]:
+            for cell in row.cells:
+                DocumentBuilder._set_cell_fill(cell, "2E4A35")
+                DocumentBuilder._set_cell_text_color(cell, "FFFFFF")
 
     def _inject_section(self, doc: Document, section_name: str, content: str) -> bool:
         """Find heading in template, remove placeholder paragraphs, inject content."""
@@ -1252,15 +1412,19 @@ class DocumentBuilder:
                     except Exception:
                         pass
             anchor_elem = paragraphs[heading_idx]._element
-            _use_formatted = section_name.upper() in _LABELED_FORMAT_SECTIONS
+            _use_formatted    = section_name.upper() in _LABELED_FORMAT_SECTIONS
+            _use_hierarchical = section_name.upper() in _HIERARCHICAL_BULLET_SECTIONS
             if _use_formatted:
                 self._inject_formatted_blocks_after_element(anchor_elem, content)
+            elif _use_hierarchical:
+                self._inject_hierarchical_bullets_after_element(anchor_elem, content)
             else:
                 self._inject_blocks_after_element(anchor_elem, content)
             logger.info(
-                "doc_builder.section_injected section=%s blocks=%d (full_clear%s)",
+                "doc_builder.section_injected section=%s blocks=%d (full_clear%s%s)",
                 section_name, len(content_blocks),
                 ",formatted" if _use_formatted else "",
+                ",hierarchical" if _use_hierarchical else "",
             )
             return True
 
