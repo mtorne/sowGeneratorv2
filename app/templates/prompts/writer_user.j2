@@ -26,12 +26,27 @@ Do NOT use these words: jointly, joint, Oracle Labs, Oracle team.
 {% endif %}
 
 {% if section_name == 'SCOPE' %}
-Write 1-2 introductory sentences (maximum 40 words total) for the Scope section.
-Briefly state what this engagement delivers to the customer at a high level.
-Do NOT list deliverables — those are captured in the structured scope boxes that follow.
+Write exactly THREE labeled blocks — one for each scope perspective box below.
+Each block: label on its own line (no colon), then 2-4 sentences of specific scope content.
+Use these EXACT labels (copy verbatim, one per line):
+
+Initial Understanding
+Customer Desired Outcome
+Agreed Outcome
+
+Guidelines:
+- Initial Understanding: what is currently known about what the customer needs; what must be
+  validated together before work starts.
+- Customer Desired Outcome: the end-state the customer wants to achieve from their perspective
+  (business value, performance, operational goals).
+- Agreed Outcome: the mutually agreed deliverables and success criteria for this engagement.
+
 Strict rules:
-- Do NOT use the words: joint, jointly, Oracle, Oracle Labs, Oracle team, common understanding.
-- Do NOT add markdown headings or bullet list syntax.
+- Do NOT use the words: joint, jointly, Oracle Labs, Oracle team.
+- Do NOT write any prose before the first label.
+- Do NOT add markdown syntax (no #, *, –).
+- Separate the three blocks with a blank line.
+- Maximum 50 words per block body.
 {% endif %}
 
 {% if section_name == 'ARCHITECTURE COMPONENTS' %}
@@ -100,6 +115,33 @@ Use "–" as the bullet prefix. Maximum 8 bullets. Each bullet covers one key co
 Focus on: compute platform, container/VM setup, networking, databases, CI/CD, observability, HA/DR.
 Draw facts from architecture_analysis.current in the project data JSON if present.
 Do NOT write prose paragraphs. Bullet points only. No markdown headings.
+{% endif %}
+
+{% if section_name == 'MANAGED SERVICES CONFIGURATION' %}
+Write a concise description of the OCI managed services that Oracle will configure and operate
+as part of this engagement.
+
+You MUST explicitly name the specific OCI managed services from the list below that are
+relevant to this project (based on the project data JSON).  Do NOT use generic terms like
+"managed database" or "container platform" — always use the official OCI service name.
+
+Key OCI managed services to consider (only include those relevant to this project):
+- Oracle Autonomous Database (ADB / ATP / ADW)
+- MySQL Database Service (MDS / MySQL HeatWave)
+- Oracle Database Cloud Service (DBCS / dbsystem / ExaCS)
+- Oracle Kubernetes Engine (OKE)
+- Oracle Container Instances (OCI)
+- Oracle Cache (Redis-compatible managed cache)
+- Oracle Functions (serverless)
+- OCI Streaming (managed Kafka-compatible)
+- Oracle Integration Cloud (OIC)
+- OCI API Gateway
+- Oracle GoldenGate
+- OCI Vault (key management)
+
+Format: Write 2-4 sentences. After the introductory sentence, add one bullet per selected
+managed service using "– " prefix, naming the service and its role in the architecture.
+Do NOT add markdown headings. Do NOT mention services not relevant to the project.
 {% endif %}
 
 {% if section_name == 'ARCHITECT REVIEW' %}
