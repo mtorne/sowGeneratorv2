@@ -311,20 +311,30 @@ class DocumentBuilder:
             token_map["Project1"] = self.project_name
 
         def _process_p_element(p_elem) -> None:
-            # Direct-child runs — used for Pass 2 / 3 context-based substitution.
-            r_elems = p_elem.findall(qn("w:r"))
-
+            # Build an ordered run list: direct-child <w:r> elements and
+            # <w:fldSimple> children interleaved in document order.
+            #
             # Word templates often store Customer1 / Project1 as a DOCPROPERTY
-            # field: <w:fldSimple w:instr="DOCPROPERTY 01_Customer …"><w:r>…</w:r>
-            # </w:fldSimple>.  The run inside the field is a grandchild of <w:p>,
-            # not a direct child, so findall(qn("w:r")) would miss it.  Collect
-            # those extra runs for Pass 1 (literal token replacement) only.
-            field_runs = [
-                r
-                for fld in p_elem.findall(qn("w:fldSimple"))
-                for r in fld.findall(qn("w:r"))
-            ]
-            all_r_for_pass1 = list(r_elems) + field_runs
+            # field:  <w:fldSimple w:instr="DOCPROPERTY 01_Customer">
+            #           <w:r><w:t> </w:t></w:r>   ← grandchild placeholder
+            #         </w:fldSimple>
+            # A plain findall("w:r") returns only DIRECT children and misses
+            # these grandchild runs.  When the blank placeholder sits inside a
+            # fldSimple, Pass 2's context-suffix matching never sees it and the
+            # customer name is never injected.
+            #
+            # Iterating p_elem's direct children in order and expanding
+            # fldSimple elements preserves the correct left-context (the run
+            # BEFORE the fldSimple still appears at index i-1 so suffix
+            # matching works correctly).
+            r_elems = []
+            for child in p_elem:
+                if child.tag == qn("w:r"):
+                    r_elems.append(child)
+                elif child.tag == qn("w:fldSimple"):
+                    r_elems.extend(child.findall(qn("w:r")))
+
+            all_r_for_pass1 = r_elems  # fldSimple runs now included
 
             if not all_r_for_pass1:
                 return
@@ -360,13 +370,7 @@ class DocumentBuilder:
                             if next_text.startswith(replacement):
                                 _set_text(r_elems[idx + 1], next_text[len(replacement):])
                         _set_text(r, new_val)
-            # Also replace in fldSimple nested runs (no anti-dup needed — these
-            # are isolated field runs that don't have adjacent context runs).
-            for r in field_runs:
-                for token, replacement in token_map.items():
-                    current = _text(r)
-                    if token in current:
-                        _set_text(r, current.replace(token, replacement))
+            # (fldSimple runs are now part of r_elems and processed above)
 
             if not r_elems:
                 return  # no direct-child runs → skip Pass 2/3
