@@ -56,13 +56,17 @@ _FULL_CLEAR_SECTIONS = frozenset({
     # STATUS AND NEXT STEPS has only generic template intro text ("Current status
     # and what needs to happen next…") — replace it entirely with the LLM output.
     "STATUS AND NEXT STEPS",
+    # OCI SERVICE SIZING AND AMOUNTS — the template has several generic intro
+    # paragraphs; replace them all with the single LLM-generated sentence.
+    "OCI SERVICE SIZING AND AMOUNTS",
 })
 
 # Sections where LLM content should be injected RIGHT AFTER the heading,
-# BEFORE any surviving template paragraphs (e.g. colored scope boxes).
-_INJECT_AT_TOP_SECTIONS = frozenset({
-    "SCOPE",
-})
+# BEFORE any surviving template paragraphs.
+# SCOPE was removed from this set — it now uses _inject_scope_boxes() which
+# removes only LLM-generated intro text and injects content into the colored
+# scope-box paragraphs via soft breaks, leaving template text intact.
+_INJECT_AT_TOP_SECTIONS: frozenset[str] = frozenset()
 
 # Sections whose LLM output uses sub-topic labels (Networking, Security, Compute …)
 # and should be formatted with bold labels + sentence-level bullet points.
@@ -246,8 +250,22 @@ class DocumentBuilder:
             token_map["Project1"] = self.project_name
 
         def _process_p_element(p_elem) -> None:
+            # Direct-child runs — used for Pass 2 / 3 context-based substitution.
             r_elems = p_elem.findall(qn("w:r"))
-            if not r_elems:
+
+            # Word templates often store Customer1 / Project1 as a DOCPROPERTY
+            # field: <w:fldSimple w:instr="DOCPROPERTY 01_Customer …"><w:r>…</w:r>
+            # </w:fldSimple>.  The run inside the field is a grandchild of <w:p>,
+            # not a direct child, so findall(qn("w:r")) would miss it.  Collect
+            # those extra runs for Pass 1 (literal token replacement) only.
+            field_runs = [
+                r
+                for fld in p_elem.findall(qn("w:fldSimple"))
+                for r in fld.findall(qn("w:r"))
+            ]
+            all_r_for_pass1 = list(r_elems) + field_runs
+
+            if not all_r_for_pass1:
                 return
 
             def _get_t(r) -> object | None:
@@ -268,7 +286,7 @@ class DocumentBuilder:
                     new_t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
                     r.append(new_t)
 
-            # Pass 1: literal token replacement
+            # Pass 1: literal token replacement (direct runs + fldSimple field runs)
             for idx, r in enumerate(r_elems):
                 for token, replacement in token_map.items():
                     current = _text(r)
@@ -281,6 +299,16 @@ class DocumentBuilder:
                             if next_text.startswith(replacement):
                                 _set_text(r_elems[idx + 1], next_text[len(replacement):])
                         _set_text(r, new_val)
+            # Also replace in fldSimple nested runs (no anti-dup needed — these
+            # are isolated field runs that don't have adjacent context runs).
+            for r in field_runs:
+                for token, replacement in token_map.items():
+                    current = _text(r)
+                    if token in current:
+                        _set_text(r, current.replace(token, replacement))
+
+            if not r_elems:
+                return  # no direct-child runs → skip Pass 2/3
 
             # Refresh run texts after pass 1
             run_texts = [_text(r) for r in r_elems]
@@ -629,6 +657,150 @@ class DocumentBuilder:
             logger.info("doc_builder.blank_heading_page_breaks_suppressed count=%d", removed_pbr)
         if removed_brk:
             logger.info("doc_builder.blank_para_page_breaks_suppressed count=%d", removed_brk)
+
+    # ------------------------------------------------------------------
+    # SCOPE colored-box content injection
+    # ------------------------------------------------------------------
+
+    # Mapping from LLM section label keywords (lower-case, partial match) to
+    # the zero-based index of the scope colored box it belongs to.
+    _SCOPE_LABEL_TO_BOX: list[tuple[str, int]] = [
+        ("initial understanding", 0),
+        ("initial scope",         0),
+        ("customer desired outcome", 1),
+        ("desired outcome (customer)", 1),
+        ("customer perspective",  1),
+        ("desired outcome of",    1),
+        ("agreed outcome",        2),
+        ("desired outcome (agreed)", 2),
+        ("jointly agreed",        2),
+        ("oracle",                2),   # fallback for "agreed with Oracle" phrases
+    ]
+
+    def _inject_scope_boxes(
+        self,
+        doc: Document,
+        heading_idx: int,
+        next_heading_idx: int,
+        content: str,
+    ) -> None:
+        """Handle SCOPE section injection.
+
+        Unlike every other section, SCOPE retains its template infrastructure
+        (the three colored paragraph boxes) and injects LLM content INSIDE
+        each box via soft-return runs.  LLM-generated intro paragraphs that
+        were inserted before the boxes in an earlier pass are removed.
+
+        Algorithm
+        ---------
+        1. Walk paragraphs between the Scope heading and the next heading.
+        2. Paragraphs that have **both** ``<w:pBdr>`` and ``<w:shd>`` are the
+           colored scope boxes — collect them.
+        3. Paragraphs that appear **before** the first box AND have no
+           ``w:rsidR`` attribute (i.e. were injected by the LLM pipeline, not
+           present in the original template) are removed as stale intro text.
+        4. Parse the LLM ``content`` into up to three labeled blocks using
+           :data:`_SCOPE_LABEL_TO_BOX`.
+        5. For each box paragraph, append a ``<w:br w:type="textWrapping"/>``
+           soft break followed by the matching LLM text as new ``<w:r>`` runs.
+           This keeps all content inside the box border.
+        """
+        paragraphs = list(doc.paragraphs)
+        body = doc.element.body
+        W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+        box_paras: list = []
+        pre_box_llm_paras: list = []
+        first_box_found = False
+
+        for i in range(heading_idx + 1, next_heading_idx):
+            para = paragraphs[i]
+            p = para._element
+            has_pBdr = p.find(f".//{qn('w:pBdr')}") is not None
+            has_shd  = p.find(f".//{qn('w:shd')}")  is not None
+            is_box   = has_pBdr and has_shd
+
+            if is_box:
+                box_paras.append(para)
+                first_box_found = True
+            elif not first_box_found and para.text.strip():
+                # Non-empty para before any box — check if it is LLM-injected
+                # (no w:rsidR attribute) or a template para (has w:rsidR).
+                has_rsid = p.get(f"{{{W}}}rsidR") is not None
+                if not has_rsid:
+                    pre_box_llm_paras.append(para)
+
+        # Remove stale LLM intro paragraphs
+        for para in pre_box_llm_paras:
+            try:
+                body.remove(para._element)
+                logger.debug("doc_builder.scope_intro_removed text=%r", para.text[:60])
+            except Exception:
+                pass
+
+        if not box_paras:
+            logger.warning("doc_builder.scope_no_boxes_found — falling back to append")
+            anchor = paragraphs[heading_idx]._element
+            self._inject_blocks_after_element(anchor, content)
+            return
+
+        # ── Parse LLM output into 3 labeled blocks ────────────────────────
+        blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
+        box_contents: list[str] = ["", "", ""]
+        current_box = 0
+
+        for block in blocks:
+            lines   = block.split("\n", 1)
+            label   = lines[0].strip().rstrip(":").lower()
+            body_text = lines[1].strip() if len(lines) > 1 else ""
+
+            matched = False
+            for keyword, idx in self._SCOPE_LABEL_TO_BOX:
+                if keyword in label:
+                    current_box = idx
+                    box_contents[idx] = body_text or block
+                    matched = True
+                    break
+            if not matched:
+                # No recognised label — treat whole block as content for current box
+                if box_contents[current_box]:
+                    box_contents[current_box] += " " + block
+                else:
+                    box_contents[current_box] = block
+
+        # ── Inject into box paragraphs via soft break ──────────────────────
+        for box_idx, (box_para, box_text) in enumerate(
+            zip(box_paras, box_contents)
+        ):
+            if not box_text.strip():
+                continue
+            p_elem = box_para._element
+
+            # Soft break so the injected text starts on a new visual line
+            # inside the same paragraph (and therefore the same box border).
+            br_run = OxmlElement("w:r")
+            br_inner = OxmlElement("w:br")
+            br_inner.set(qn("w:type"), "textWrapping")
+            br_run.append(br_inner)
+            p_elem.append(br_run)
+
+            # One run per line of content
+            for line in box_text.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                r_elem = OxmlElement("w:r")
+                t_elem = OxmlElement("w:t")
+                t_elem.text = line
+                t_elem.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                r_elem.append(t_elem)
+                p_elem.append(r_elem)
+
+        logger.info(
+            "doc_builder.scope_boxes_filled boxes=%d removed_intro=%d",
+            len(box_paras),
+            len(pre_box_llm_paras),
+        )
 
     # ------------------------------------------------------------------
     # Formatted block injection (bold labels + bullet sentences)
@@ -1056,6 +1228,17 @@ class DocumentBuilder:
         body = doc.element.body
         content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
 
+        # ── SCOPE special handling ───────────────────────────────────────
+        # Retains the colored scope-box paragraphs from the template, removes
+        # only LLM-generated intro text, and injects content inside each box.
+        if section_name.upper() == "SCOPE":
+            self._inject_scope_boxes(doc, heading_idx, next_heading_idx, content)
+            logger.info(
+                "doc_builder.section_injected section=%s blocks=%d (scope_boxes)",
+                section_name, len(content_blocks),
+            )
+            return True
+
         # ── Full-clear sections ──────────────────────────────────────────
         # For sections that are 100% LLM-generated, remove ALL non-heading
         # template paragraphs between the section heading and the next
@@ -1089,20 +1272,16 @@ class DocumentBuilder:
                 body.remove(para._element)
 
         # Determine the injection anchor.
-        # For _INJECT_AT_TOP_SECTIONS (e.g. SCOPE), inject immediately after the
-        # heading so that LLM content appears BEFORE any surviving template
-        # paragraphs (e.g. the coloured scope-box headers).
-        # For all other sections, advance the anchor past any template intro
-        # text so LLM content is appended after it.
+        # Advance the anchor past any template intro text so LLM content is
+        # appended after it (never before surviving template paragraphs).
         anchor_elem = paragraphs[heading_idx]._element
-        if section_name.upper() not in _INJECT_AT_TOP_SECTIONS:
-            for i in range(heading_idx + 1, next_heading_idx):
-                para = paragraphs[i]
-                lvl = self._get_heading_level(para)
-                if lvl is not None:
-                    break  # hit a sub-heading — keep current anchor
-                if para.text.strip() and not _PLACEHOLDER_RE.search(para.text):
-                    anchor_elem = para._element  # advance anchor past intro para(s)
+        for i in range(heading_idx + 1, next_heading_idx):
+            para = paragraphs[i]
+            lvl = self._get_heading_level(para)
+            if lvl is not None:
+                break  # hit a sub-heading — keep current anchor
+            if para.text.strip() and not _PLACEHOLDER_RE.search(para.text):
+                anchor_elem = para._element  # advance anchor past intro para(s)
 
         if section_name.upper() in _LABELED_FORMAT_SECTIONS:
             self._inject_formatted_blocks_after_element(anchor_elem, content)
