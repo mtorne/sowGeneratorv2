@@ -43,6 +43,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+async def _log_startup_version() -> None:
+    """Log the running git commit and active feature flags on every startup.
+
+    This makes it immediately visible in the log which code version is
+    deployed — avoids confusion when changes have been made locally but
+    the server has not been restarted / pulled yet.
+    """
+    import subprocess
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        commit = "unknown"
+
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        branch = "unknown"
+
+    # Import feature-flag constants so the log shows exactly what is active.
+    from app.services.doc_builder import (
+        _FULL_CLEAR_SECTIONS,
+        _SINGLE_SENTENCE_SECTIONS,
+        _HIERARCHICAL_BULLET_SECTIONS,
+        _CUSTOMER_PREFIX_SUFFIXES,
+    )
+
+    logger.info(
+        "startup.version commit=%s branch=%s app_version=%s",
+        commit, branch, app.version,
+    )
+    logger.info(
+        "startup.features "
+        "full_clear_sections=%s "
+        "single_sentence_sections=%s "
+        "hierarchical_sections=%s "
+        "customer_suffix_count=%d "
+        "agreement_between_fix=%s "
+        "fldSimple_pass2_fix=True",
+        sorted(_FULL_CLEAR_SECTIONS),
+        sorted(_SINGLE_SENTENCE_SECTIONS),
+        sorted(_HIERARCHICAL_BULLET_SECTIONS),
+        len(_CUSTOMER_PREFIX_SUFFIXES),
+        "agreement between " in _CUSTOMER_PREFIX_SUFFIXES,
+    )
+
 KNOWN_SERVICES = {
     "oke",
     "mysql",
