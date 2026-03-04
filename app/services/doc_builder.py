@@ -1359,34 +1359,100 @@ class DocumentBuilder:
 
     @staticmethod
     def _style_bom_table(table) -> None:
-        """Apply OCI BOM table visual styling.
+        """Apply OCI BOM table visual styling — unified with the Acceptance Criteria table.
 
-        * Header row: light blue fill (``BDD7EE``), dark navy bold text
-          (``1F3864``).  Also fixes the common "Sizing Unites" header typo.
-        * Data rows: dark grayish-green fill (``2E4A35``), white text.
+        Table-level
+        -----------
+        * Style ``BasicTable09Redwood`` (matches Acceptance Criteria table).
+        * All four outer borders: single, sz=6, color ``312D2A``.
+
+        Header row
+        ----------
+        * Fill: dark navy ``001F5B``.
+        * Text: white ``FFFFFF``, bold, centred.
+        * Also fixes the "Sizing Units" header text/typo and removes any
+          duplicate second paragraph inside the cell.
+
+        Data rows
+        ---------
+        * First column fill: ``D4DFDF`` (teal-grey, matches Acceptance Criteria).
+        * Other columns fill: ``E9EFEF`` (lighter teal-grey).
+        * Text: black ``000000``.
         """
         if not table.rows:
             return
+
+        # ── Table-level style and borders ──────────────────────────────
+        tbl_elem = table._tbl
+        tblPr = tbl_elem.find(qn("w:tblPr"))
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl_elem.insert(0, tblPr)
+
+        # tblStyle
+        tblStyle = tblPr.find(qn("w:tblStyle"))
+        if tblStyle is None:
+            tblStyle = OxmlElement("w:tblStyle")
+            tblPr.insert(0, tblStyle)
+        tblStyle.set(qn("w:val"), "BasicTable09Redwood")
+
+        # tblBorders — replace entirely
+        for old in tblPr.findall(qn("w:tblBorders")):
+            tblPr.remove(old)
+        tblBorders = OxmlElement("w:tblBorders")
+        for side in ("top", "left", "bottom", "right"):
+            b = OxmlElement(f"w:{side}")
+            b.set(qn("w:val"), "single")
+            b.set(qn("w:sz"), "6")
+            b.set(qn("w:space"), "0")
+            b.set(qn("w:color"), "312D2A")
+            b.set(qn("w:themeColor"), "text1")
+            tblBorders.append(b)
+        tblPr.append(tblBorders)
+
+        # tblLook
+        for old in tblPr.findall(qn("w:tblLook")):
+            tblPr.remove(old)
+        tblLook = OxmlElement("w:tblLook")
+        tblLook.set(qn("w:val"), "04A0")
+        tblLook.set(qn("w:firstRow"), "1")
+        tblLook.set(qn("w:lastRow"), "0")
+        tblLook.set(qn("w:firstColumn"), "1")
+        tblLook.set(qn("w:lastColumn"), "0")
+        tblLook.set(qn("w:noHBand"), "0")
+        tblLook.set(qn("w:noVBand"), "1")
+        tblPr.append(tblLook)
+
         # ── Header row ─────────────────────────────────────────────────
         header_row = table.rows[0]
         for cell in header_row.cells:
             cell_text = cell.text.strip()
             if "sizing" in cell_text.lower() and "unit" in cell_text.lower():
                 DocumentBuilder._set_cell_text(cell, "Sizing Units (ex. vCPUs)")
-                # Remove any extra paragraphs beyond the first (template cells
-                # sometimes have a subtitle line such as "(ex. vCPUs)" as a
-                # second <w:p>, which _set_cell_text leaves untouched and causes
-                # visual duplication: "Sizing Units (ex. vCPUs)\n(ex. vCPUs)").
+                # Remove duplicate second <w:p> that causes "…(ex. vCPUs)\n(ex. vCPUs)"
                 tc = cell._tc
                 for extra_p in tc.findall(qn("w:p"))[1:]:
                     tc.remove(extra_p)
-            DocumentBuilder._set_cell_fill(cell, "BDD7EE")
-            DocumentBuilder._set_cell_text_color(cell, "1F3864", bold=True)
+            DocumentBuilder._set_cell_fill(cell, "001F5B")
+            DocumentBuilder._set_cell_text_color(cell, "FFFFFF", bold=True)
+            # Centre-align header text
+            for para in cell.paragraphs:
+                pPr = para._p.find(qn("w:pPr"))
+                if pPr is None:
+                    pPr = OxmlElement("w:pPr")
+                    para._p.insert(0, pPr)
+                jc = pPr.find(qn("w:jc"))
+                if jc is None:
+                    jc = OxmlElement("w:jc")
+                    pPr.append(jc)
+                jc.set(qn("w:val"), "center")
+
         # ── Data rows ──────────────────────────────────────────────────
         for row in table.rows[1:]:
-            for cell in row.cells:
-                DocumentBuilder._set_cell_fill(cell, "2E4A35")
-                DocumentBuilder._set_cell_text_color(cell, "FFFFFF")
+            for ci, cell in enumerate(row.cells):
+                fill = "D4DFDF" if ci == 0 else "E9EFEF"
+                DocumentBuilder._set_cell_fill(cell, fill)
+                DocumentBuilder._set_cell_text_color(cell, "000000")
 
     def _inject_section(self, doc: Document, section_name: str, content: str) -> bool:
         """Find heading in template, remove placeholder paragraphs, inject content."""
