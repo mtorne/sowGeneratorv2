@@ -751,51 +751,72 @@ class DocumentBuilder:
     ) -> None:
         """Handle SCOPE section injection.
 
-        Unlike every other section, SCOPE retains its template infrastructure
-        (the three colored paragraph boxes) and injects LLM content INSIDE
-        each box via soft-return runs.  LLM-generated intro paragraphs that
-        were inserted before the boxes in an earlier pass are removed.
+        The template has three colored box *header* paragraphs (pBdr + shd)
+        each followed by one or more plain *content* paragraphs (no border).
+        The correct visual layout is:
+
+            ┌─────────────────────────────────────┐
+            │  Header label (colored background)  │  ← template paragraph, untouched
+            └─────────────────────────────────────┘
+            Body text, bullets, numbered lists…      ← plain paragraphs, LLM content
+
+        The old approach appended content into the header paragraph via soft
+        breaks, collapsing header + body into one bordered box.  This rewrite
+        leaves every header paragraph untouched and injects LLM text into the
+        plain content paragraphs that already exist in the template below each
+        header.
 
         Algorithm
         ---------
         1. Walk paragraphs between the Scope heading and the next heading.
-        2. Paragraphs that have **both** ``<w:pBdr>`` and ``<w:shd>`` are the
-           colored scope boxes — collect them.
-        3. Paragraphs that appear **before** the first box AND have no
-           ``w:rsidR`` attribute (i.e. were injected by the LLM pipeline, not
-           present in the original template) are removed as stale intro text.
+        2. Build *box_groups*: list of (header_para, [plain_content_paras]).
+           A header paragraph has **both** ``<w:pBdr>`` and ``<w:shd>``.
+           All subsequent paragraphs without ``<w:pBdr>`` belong to that group.
+        3. Remove LLM-injected paragraphs that appeared *before* the first box.
         4. Parse the LLM ``content`` into up to three labeled blocks using
            :data:`_SCOPE_LABEL_TO_BOX`.
-        5. For each box paragraph, append a ``<w:br w:type="textWrapping"/>``
-           soft break followed by the matching LLM text as new ``<w:r>`` runs.
-           This keeps all content inside the box border.
+        5. For each group: clear the placeholder text from the first plain
+           content paragraph and write the LLM lines there.  Extra lines are
+           inserted as new plain paragraphs immediately after (cloning the
+           paragraph properties of the template content paragraph).
         """
+        import copy
+
         paragraphs = list(doc.paragraphs)
         body = doc.element.body
         W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
-        box_paras: list = []
+        # ── Step 1: classify paragraphs into box groups ────────────────────
+        box_groups: list[tuple] = []          # (header_para, [content_paras])
         pre_box_llm_paras: list = []
         first_box_found = False
+        current_header = None
+        current_content_paras: list = []
 
         for i in range(heading_idx + 1, next_heading_idx):
             para = paragraphs[i]
-            p = para._element
+            p    = para._element
             has_pBdr = p.find(f".//{qn('w:pBdr')}") is not None
             has_shd  = p.find(f".//{qn('w:shd')}")  is not None
-            is_box   = has_pBdr and has_shd
+            is_box_header = has_pBdr and has_shd
 
-            if is_box:
-                box_paras.append(para)
+            if is_box_header:
+                if current_header is not None:
+                    box_groups.append((current_header, current_content_paras))
+                current_header = para
+                current_content_paras = []
                 first_box_found = True
+            elif current_header is not None:
+                current_content_paras.append(para)
             elif not first_box_found and para.text.strip():
-                # Non-empty para before any box — check if it is LLM-injected
-                # (no w:rsidR attribute) or a template para (has w:rsidR).
                 has_rsid = p.get(f"{{{W}}}rsidR") is not None
                 if not has_rsid:
                     pre_box_llm_paras.append(para)
 
-        # Remove stale LLM intro paragraphs
+        if current_header is not None:
+            box_groups.append((current_header, current_content_paras))
+
+        # ── Step 2: remove stale LLM intro paragraphs ─────────────────────
         for para in pre_box_llm_paras:
             try:
                 body.remove(para._element)
@@ -803,75 +824,99 @@ class DocumentBuilder:
             except Exception:
                 pass
 
-        if not box_paras:
+        if not box_groups:
             logger.warning("doc_builder.scope_no_boxes_found — falling back to append")
             anchor = paragraphs[heading_idx]._element
             self._inject_blocks_after_element(anchor, content)
             return
 
-        # ── Parse LLM output into 3 labeled blocks ────────────────────────
+        # ── Step 3: parse LLM output into 3 labeled blocks ────────────────
         blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
         box_contents: list[str] = ["", "", ""]
         current_box = 0
 
         for block in blocks:
-            lines   = block.split("\n", 1)
-            label   = lines[0].strip().rstrip(":").lower()
+            lines     = block.split("\n", 1)
+            label     = lines[0].strip().rstrip(":").lower()
             body_text = lines[1].strip() if len(lines) > 1 else ""
 
             matched = False
             for keyword, idx in self._SCOPE_LABEL_TO_BOX:
                 if keyword in label:
-                    current_box = idx
+                    current_box   = idx
                     box_contents[idx] = body_text or block
-                    matched = True
+                    matched       = True
                     break
             if not matched:
-                # No recognised label — treat whole block as content for current box
                 if box_contents[current_box]:
-                    box_contents[current_box] += " " + block
+                    box_contents[current_box] += "\n" + block
                 else:
                     box_contents[current_box] = block
 
-        # ── Inject into box paragraphs via soft break ──────────────────────
-        for box_idx, (box_para, box_text) in enumerate(
-            zip(box_paras, box_contents)
-        ):
-            if not box_text.strip():
+        # ── Step 4: inject into plain content paragraphs below each header ─
+        for box_idx, (header_para, content_paras) in enumerate(box_groups):
+            if box_idx >= len(box_contents):
+                break
+            box_text = box_contents[box_idx].strip()
+            if not box_text:
                 continue
-            p_elem = box_para._element
 
-            # Soft break so the injected text starts on a new visual line
-            # inside the same paragraph (and therefore the same box border).
-            br_run = OxmlElement("w:r")
-            br_inner = OxmlElement("w:br")
-            br_inner.set(qn("w:type"), "textWrapping")
-            br_run.append(br_inner)
-            p_elem.append(br_run)
+            # Find the first plain paragraph (no pBdr) to use as anchor.
+            # Blank separator paragraphs are skipped in favour of the first
+            # paragraph that either has text or follows the header directly.
+            plain_paras = [
+                cp for cp in content_paras
+                if cp._element.find(f".//{qn('w:pBdr')}") is None
+            ]
 
-            # One run per line of content.
-            # Explicitly set color=000000 on every injected run so the text is
-            # always black, regardless of the paragraph's inherited colour
-            # (scope box paragraphs often carry a non-black rPr colour).
-            for line in box_text.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                r_elem = OxmlElement("w:r")
+            if plain_paras:
+                target_elem = plain_paras[0]._element
+                # Clear all existing runs / fldSimple (placeholder text)
+                for child_tag in (qn("w:r"), qn("w:fldSimple"), qn("w:hyperlink")):
+                    for ch in list(target_elem.findall(child_tag)):
+                        target_elem.remove(ch)
+            else:
+                # No content paragraph in template — insert a new one after header
+                target_elem = OxmlElement("w:p")
+                header_para._element.addnext(target_elem)
+
+            # Paragraph properties to clone for any additional new paragraphs
+            pPr_template = target_elem.find(qn("w:pPr"))
+
+            # Split content into non-empty lines
+            content_lines = [ln.strip() for ln in box_text.split("\n") if ln.strip()]
+            if not content_lines:
+                continue
+
+            def _make_run(text: str) -> "OxmlElement":
+                r = OxmlElement("w:r")
                 rPr = OxmlElement("w:rPr")
                 clr = OxmlElement("w:color")
                 clr.set(qn("w:val"), "000000")
                 rPr.append(clr)
-                r_elem.append(rPr)
-                t_elem = OxmlElement("w:t")
-                t_elem.text = line
-                t_elem.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
-                r_elem.append(t_elem)
-                p_elem.append(r_elem)
+                r.append(rPr)
+                t = OxmlElement("w:t")
+                t.text = text
+                t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                r.append(t)
+                return r
+
+            # First line → inject into the cleared template paragraph
+            target_elem.append(_make_run(content_lines[0]))
+
+            # Remaining lines → new plain paragraphs inserted after target
+            insert_after = target_elem
+            for line in content_lines[1:]:
+                new_p = OxmlElement("w:p")
+                if pPr_template is not None:
+                    new_p.append(copy.deepcopy(pPr_template))
+                new_p.append(_make_run(line))
+                insert_after.addnext(new_p)
+                insert_after = new_p
 
         logger.info(
             "doc_builder.scope_boxes_filled boxes=%d removed_intro=%d",
-            len(box_paras),
+            len(box_groups),
             len(pre_box_llm_paras),
         )
 
