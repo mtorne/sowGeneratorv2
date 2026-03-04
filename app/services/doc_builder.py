@@ -86,6 +86,15 @@ _HIERARCHICAL_BULLET_SECTIONS = frozenset({
     "CURRENT STATE ARCHITECTURE DESCRIPTION",
 })
 
+# Sections where the LLM is instructed to produce a SINGLE introductory sentence.
+# Even when the model emits extra paragraphs, only the first one is injected.
+# This prevents LLM verbosity from adding unwanted paragraphs above tables.
+_SINGLE_SENTENCE_SECTIONS = frozenset({
+    "OCI SERVICE SIZING AND AMOUNTS",
+    "PROJECT PARTICIPANTS",
+    "CURRENTLY USED TECHNOLOGY STACK",
+})
+
 # Known sub-topic label set for LABELED_FORMAT_SECTIONS
 _SUB_TOPIC_LABELS = frozenset({
     "networking",
@@ -142,6 +151,7 @@ _CUSTOMER_HEADING_PREFIXES: frozenset[str] = frozenset({
 # positives.
 _CUSTOMER_PREFIX_SUFFIXES = (
     "the Non-Disclosure Agreement between ",
+    "agreement between ",           # "require mutual agreement between [customer]"
     "free of charge for the ",
     "to enable ",
     "available to ",
@@ -1314,6 +1324,13 @@ class DocumentBuilder:
             cell_text = cell.text.strip()
             if "sizing" in cell_text.lower() and "unit" in cell_text.lower():
                 DocumentBuilder._set_cell_text(cell, "Sizing Units (ex. vCPUs)")
+                # Remove any extra paragraphs beyond the first (template cells
+                # sometimes have a subtitle line such as "(ex. vCPUs)" as a
+                # second <w:p>, which _set_cell_text leaves untouched and causes
+                # visual duplication: "Sizing Units (ex. vCPUs)\n(ex. vCPUs)").
+                tc = cell._tc
+                for extra_p in tc.findall(qn("w:p"))[1:]:
+                    tc.remove(extra_p)
             DocumentBuilder._set_cell_fill(cell, "BDD7EE")
             DocumentBuilder._set_cell_text_color(cell, "1F3864", bold=True)
         # ── Data rows ──────────────────────────────────────────────────
@@ -1398,6 +1415,21 @@ class DocumentBuilder:
                 section_name, len(content_blocks),
             )
             return True
+
+        # ── Single-sentence sections: truncate to first paragraph ────────
+        # These sections must produce exactly ONE introductory sentence.
+        # The LLM is instructed accordingly but may still emit extra
+        # paragraphs.  Silently truncate so only the first paragraph is
+        # injected, preventing unwanted text above the following table.
+        if section_name.upper() in _SINGLE_SENTENCE_SECTIONS:
+            first_block = content.split("\n\n")[0].strip()
+            if first_block:
+                content = first_block
+                content_blocks = [first_block]
+                logger.debug(
+                    "doc_builder.content_truncated_single_sentence section=%s",
+                    section_name,
+                )
 
         # ── Full-clear sections ──────────────────────────────────────────
         # For sections that are 100% LLM-generated, remove ALL non-heading
