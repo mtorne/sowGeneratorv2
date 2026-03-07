@@ -275,8 +275,8 @@ def _diagram_analysis_notes(section: str, context: dict[str, Any]) -> str:
 async def generate_sow(
     request: Request,
     project_data: str | None = Form(None),
-    current_architecture_image: UploadFile | None = File(None),
-    target_architecture_image: UploadFile | None = File(None),
+    current_architecture_images: list[UploadFile] = File(default=[]),
+    target_architecture_images: list[UploadFile] = File(default=[]),
 ) -> SowOutput:
     """Generate SoW DOCX and Markdown files using deterministic section orchestration."""
 
@@ -303,30 +303,35 @@ async def generate_sow(
         architecture_analysis: dict[str, Any] = {}
         diagram_image_bytes: dict[str, bytes] = {}
         _vision_inputs: list[tuple] = []
-        if current_architecture_image and current_architecture_image.filename:
-            _vision_inputs.append((current_architecture_image, "current"))
-        if target_architecture_image and target_architecture_image.filename:
-            _vision_inputs.append((target_architecture_image, "target"))
+        current_valid = [f for f in (current_architecture_images or []) if f.filename]
+        target_valid = [f for f in (target_architecture_images or []) if f.filename]
+        if current_valid:
+            _vision_inputs.append((current_valid, "current"))
+        if target_valid:
+            _vision_inputs.append((target_valid, "target"))
 
         if _vision_inputs:
             _t0_vision = time.monotonic()
             logger.info("workflow.vision_parallel_start diagrams=%d", len(_vision_inputs))
 
             async def _run_vision(
-                upload_file, role: str
+                upload_files: list, role: str
             ) -> tuple[str, dict[str, Any], bytes]:
-                file_bytes = await upload_file.read()
-                await upload_file.seek(0)
+                file_data: list[tuple[str, bytes]] = []
+                for uf in upload_files:
+                    file_bytes = await uf.read()
+                    await uf.seek(0)
+                    file_data.append((uf.filename or f"image_{len(file_data)}.png", file_bytes))
                 result = await asyncio.to_thread(
-                    architecture_vision.analyze,
-                    upload_file.filename,
-                    file_bytes,
+                    architecture_vision.analyze_many,
+                    file_data,
                     role,
                 )
-                return role, result, file_bytes
+                primary_bytes = file_data[0][1] if file_data else b""
+                return role, result, primary_bytes
 
             vision_results = await asyncio.gather(
-                *[_run_vision(uf, role) for uf, role in _vision_inputs]
+                *[_run_vision(ufs, role) for ufs, role in _vision_inputs]
             )
             logger.info(
                 "workflow.vision_parallel_complete elapsed=%.1fs diagrams=%d",
@@ -334,7 +339,7 @@ async def generate_sow(
                 len(_vision_inputs),
             )
 
-            for role, result, raw_bytes in vision_results:
+            for role, result, primary_bytes in vision_results:
                 arch_error = result.get("architecture_extraction", {}).get("error")
                 if arch_error:
                     logger.warning(
@@ -344,10 +349,9 @@ async def generate_sow(
                     )
                 else:
                     architecture_analysis[role] = result
-                # Always retain image bytes regardless of vision success so the
-                # image can still be embedded in the DOCX placeholder box.
-                if raw_bytes:
-                    diagram_image_bytes[role] = raw_bytes
+                # Always retain primary image bytes for DOCX placeholder embedding.
+                if primary_bytes:
+                    diagram_image_bytes[role] = primary_bytes
 
         if architecture_analysis:
             context["architecture_analysis"] = architecture_analysis

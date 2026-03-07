@@ -110,6 +110,126 @@ class ArchitectureVisionAgent:
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.timeout_read
         self.low_confidence_retries = max(0, low_confidence_retries)
 
+    def analyze_many(
+        self, files: list[tuple[str, bytes]], diagram_role: str
+    ) -> dict[str, Any]:
+        """Analyze multiple images for the same diagram role and return merged result."""
+        if not files:
+            return self._error_result(
+                diagram_role=diagram_role,
+                file_name="none",
+                fmt="unknown",
+                size_bytes=0,
+                width=0,
+                height=0,
+                error_code="no_files",
+                error_message="No image files provided.",
+            )
+        if len(files) == 1:
+            return self.analyze(files[0][0], files[0][1], diagram_role)
+
+        results = [self.analyze(fn, content, diagram_role) for fn, content in files]
+        valid = [r for r in results if "error" not in r.get("architecture_extraction", {})]
+
+        if not valid:
+            logger.warning(
+                "architecture_vision.analyze_many all_failed role=%s count=%d",
+                diagram_role,
+                len(results),
+            )
+            return results[0]
+
+        if len(valid) == 1:
+            merged = dict(valid[0])
+        else:
+            merged_extraction = self._merge_extractions(
+                [r["architecture_extraction"] for r in valid]
+            )
+            first = valid[0]
+            merged = {
+                "diagram_role": diagram_role,
+                "file_name": f"{len(files)}_images",
+                "format": first.get("format", "unknown"),
+                "size_bytes": sum(r.get("size_bytes", 0) for r in results),
+                "image_resolution": first.get("image_resolution", {}),
+                "architecture_extraction": merged_extraction,
+                "analysis_confidence": merged_extraction.get("confidence_assessment", {}),
+            }
+
+        merged["source_images"] = [
+            {
+                "file_name": r.get("file_name"),
+                "format": r.get("format"),
+                "size_bytes": r.get("size_bytes"),
+                "image_resolution": r.get("image_resolution"),
+                "confidence": r.get("analysis_confidence", {}).get("overall_confidence", "low"),
+            }
+            for r in results
+        ]
+        logger.info(
+            "architecture_vision.analyze_many_done role=%s total=%d valid=%d",
+            diagram_role,
+            len(results),
+            len(valid),
+        )
+        return merged
+
+    @staticmethod
+    def _merge_extractions(extractions: list[dict[str, Any]]) -> dict[str, Any]:
+        """Union components, deduplicate relationships, OR HA flags, pick highest confidence."""
+        component_keys = [
+            "compute", "kubernetes", "databases", "networking", "load_balancers",
+            "security", "storage", "streaming", "on_prem_connectivity",
+        ]
+        merged_components: dict[str, list[str]] = {}
+        for key in component_keys:
+            seen: set[str] = set()
+            items: list[str] = []
+            for ext in extractions:
+                for item in ext.get("components", {}).get(key, []):
+                    if item not in seen:
+                        seen.add(item)
+                        items.append(item)
+            merged_components[key] = items
+
+        seen_rels: set[tuple[str, str]] = set()
+        merged_rels: list[dict[str, Any]] = []
+        for ext in extractions:
+            for rel in ext.get("relationships", []):
+                rel_key = (str(rel.get("from", "")), str(rel.get("to", "")))
+                if rel_key not in seen_rels:
+                    seen_rels.add(rel_key)
+                    merged_rels.append(rel)
+
+        ha_merged: dict[str, Any] = {
+            "multi_ad": any(ext.get("high_availability_pattern", {}).get("multi_ad") for ext in extractions),
+            "multi_region": any(ext.get("high_availability_pattern", {}).get("multi_region") for ext in extractions),
+            "active_active": any(ext.get("high_availability_pattern", {}).get("active_active") for ext in extractions),
+            "active_passive": any(ext.get("high_availability_pattern", {}).get("active_passive") for ext in extractions),
+            "dr_mechanism": next(
+                (ext.get("high_availability_pattern", {}).get("dr_mechanism")
+                 for ext in extractions
+                 if ext.get("high_availability_pattern", {}).get("dr_mechanism")),
+                "",
+            ),
+        }
+
+        confidence_rank = {"high": 3, "medium": 2, "low": 1}
+        best = max(
+            extractions,
+            key=lambda e: confidence_rank.get(
+                str(e.get("confidence_assessment", {}).get("overall_confidence", "low")).lower(), 1
+            ),
+        )
+
+        return {
+            "diagram_summary": best.get("diagram_summary", {}),
+            "components": merged_components,
+            "relationships": merged_rels,
+            "high_availability_pattern": ha_merged,
+            "confidence_assessment": best.get("confidence_assessment", {}),
+        }
+
     def analyze(self, file_name: str, content: bytes, diagram_role: str) -> dict[str, Any]:
         size_bytes = len(content)
         metadata = self._read_image_metadata(content=content, file_name=file_name)
