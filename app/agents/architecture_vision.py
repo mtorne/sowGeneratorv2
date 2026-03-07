@@ -393,6 +393,14 @@ class ArchitectureVisionAgent:
             with Image.open(BytesIO(content)) as image:
                 width, height = image.size
                 fmt = (image.format or "unknown").lower()
+        except Image.DecompressionBombError:
+            logger.warning(
+                "architecture_vision.decompression_bomb file=%s size_bytes=%s "
+                "message=Image exceeds PIL pixel limit, skipping vision analysis.",
+                file_name,
+                len(content),
+            )
+            return None
         except (UnidentifiedImageError, OSError, ValueError):
             logger.exception("architecture_vision.image_unreadable file=%s", file_name)
             return None
