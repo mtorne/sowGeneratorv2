@@ -230,7 +230,39 @@ class ArchitectureVisionAgent:
             "confidence_assessment": best.get("confidence_assessment", {}),
         }
 
+    @staticmethod
+    def _downsample_if_needed(content: bytes, file_name: str, max_dimension: int = 4096) -> bytes:
+        """Resize image to fit within max_dimension on its longest side, if it exceeds that size."""
+        try:
+            from PIL import Image
+        except ModuleNotFoundError:
+            return content
+
+        old_limit = Image.MAX_IMAGE_PIXELS
+        Image.MAX_IMAGE_PIXELS = None  # disable bomb check just for this open
+        try:
+            with Image.open(BytesIO(content)) as image:
+                w, h = image.size
+                if w <= max_dimension and h <= max_dimension:
+                    return content
+                scale = max_dimension / max(w, h)
+                new_w, new_h = int(w * scale), int(h * scale)
+                logger.warning(
+                    "architecture_vision.downsampling file=%s original=%dx%d target=%dx%d",
+                    file_name, w, h, new_w, new_h,
+                )
+                resized = image.resize((new_w, new_h), Image.LANCZOS)
+                buf = BytesIO()
+                resized.save(buf, format="PNG")
+                return buf.getvalue()
+        except Exception:
+            logger.warning("architecture_vision.downsample_failed file=%s", file_name, exc_info=True)
+            return content
+        finally:
+            Image.MAX_IMAGE_PIXELS = old_limit
+
     def analyze(self, file_name: str, content: bytes, diagram_role: str) -> dict[str, Any]:
+        content = self._downsample_if_needed(content, file_name)
         size_bytes = len(content)
         metadata = self._read_image_metadata(content=content, file_name=file_name)
         self._log_image_metadata(file_name=file_name, size_bytes=size_bytes, metadata=metadata)
@@ -393,6 +425,14 @@ class ArchitectureVisionAgent:
             with Image.open(BytesIO(content)) as image:
                 width, height = image.size
                 fmt = (image.format or "unknown").lower()
+        except Image.DecompressionBombError:
+            logger.error(
+                "architecture_vision.decompression_bomb_after_downsample file=%s size_bytes=%s "
+                "message=Image still exceeds PIL pixel limit after downsample attempt.",
+                file_name,
+                len(content),
+            )
+            return None
         except (UnidentifiedImageError, OSError, ValueError):
             logger.exception("architecture_vision.image_unreadable file=%s", file_name)
             return None
