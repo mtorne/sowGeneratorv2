@@ -231,15 +231,22 @@ class ArchitectureVisionAgent:
         }
 
     @staticmethod
-    def _downsample_if_needed(content: bytes, file_name: str, max_dimension: int = 4096) -> bytes:
-        """Resize image to fit within max_dimension on its longest side, if it exceeds that size."""
+    def _downsample_if_needed(content: bytes, file_name: str, max_dimension: int = 4096) -> bytes | None:
+        """Resize image to fit within max_dimension on its longest side, if it exceeds that size.
+
+        Returns None if the image cannot be opened or downsampled (e.g. too large for PIL).
+        Callers must treat None as an unprocessable image.
+        """
         try:
             from PIL import Image
         except ModuleNotFoundError:
             return content
 
-        old_limit = Image.MAX_IMAGE_PIXELS
-        Image.MAX_IMAGE_PIXELS = None  # disable bomb check just for this open
+        # Permanently suppress the PIL bomb check for this process. Saving/restoring
+        # the global limit is racy in a multi-threaded server; we do our own size
+        # handling and can safely ignore PIL's default cap.
+        Image.MAX_IMAGE_PIXELS = None
+
         try:
             with Image.open(BytesIO(content)) as image:
                 w, h = image.size
@@ -257,12 +264,28 @@ class ArchitectureVisionAgent:
                 return buf.getvalue()
         except Exception:
             logger.warning("architecture_vision.downsample_failed file=%s", file_name, exc_info=True)
-            return content
-        finally:
-            Image.MAX_IMAGE_PIXELS = old_limit
+            return None
 
     def analyze(self, file_name: str, content: bytes, diagram_role: str) -> dict[str, Any]:
-        content = self._downsample_if_needed(content, file_name)
+        original_size = len(content)
+        downsampled = self._downsample_if_needed(content, file_name)
+        if downsampled is None:
+            logger.warning(
+                "architecture_vision.image_too_large_skipped file=%s size_bytes=%s",
+                file_name,
+                original_size,
+            )
+            return self._error_result(
+                diagram_role=diagram_role,
+                file_name=file_name,
+                fmt="unknown",
+                size_bytes=original_size,
+                width=0,
+                height=0,
+                error_code="image_too_large",
+                error_message="Image exceeds maximum processable size and could not be downsampled.",
+            )
+        content = downsampled
         size_bytes = len(content)
         metadata = self._read_image_metadata(content=content, file_name=file_name)
         self._log_image_metadata(file_name=file_name, size_bytes=size_bytes, metadata=metadata)
