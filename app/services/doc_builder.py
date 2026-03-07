@@ -120,6 +120,23 @@ _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
 # Literal string placed by LLM for unknown values — rendered red in the DOCX.
 _PENDING_MARKER = "PENDING TO REVIEW"
 
+# Known capitalisation errors baked into the sow_template.docx headings.
+# Applied to every <w:t> element in the document so both headings and their
+# cached TOC counterparts are corrected on every build.
+_HEADING_TEXT_FIXES: tuple[tuple[str, str], ...] = (
+    ("NExt STEPS",    "Next Steps"),
+    (" STate ",       " State "),
+    ("CuRrently",     "Currently"),   # may also appear split across runs — see below
+)
+
+# Known typos and informal notations in the template body text.
+_BODY_TEXT_FIXES: tuple[tuple[str, str], ...] = (
+    ("Capability/Metrci",           "Capability/Metric"),
+    ("Possible arias to include",   "Possible areas to include"),
+    ("NB**  ",                      "Note: "),
+    ("NB** ",                       "Note: "),
+)
+
 # Placeholder text patterns to remove when found inside a section.
 # NOTE: "Initial understanding of the scope", "Desired Outcome, as jointly agreed",
 # and "Any change in the objectives and scope" have been deliberately removed so
@@ -333,6 +350,11 @@ class DocumentBuilder:
                     r_elems.append(child)
                 elif child.tag == qn("w:fldSimple"):
                     r_elems.extend(child.findall(qn("w:r")))
+                elif child.tag == qn("w:hyperlink"):
+                    # TOC entries wrap their text runs inside <w:hyperlink>.
+                    # Including those runs here ensures Customer1 / Project1
+                    # tokens inside cached TOC text are also substituted.
+                    r_elems.extend(child.findall(qn("w:r")))
 
             all_r_for_pass1 = r_elems  # fldSimple runs now included
 
@@ -464,12 +486,62 @@ class DocumentBuilder:
             self.project_name,
         )
 
+    def _normalize_template_artifacts(self, doc: Document) -> None:
+        """Fix known typos, capitalisation errors, and artefacts in the template.
+
+        Runs after :meth:`_substitute_names` on every build so that the output
+        DOCX is clean regardless of whether the source sow_template.docx has
+        been patched.  Covers:
+
+        * Heading capitalisation errors (``NExt STEPS``, ``CuRrently``, ``STate``)
+          — applied to every ``<w:t>`` so both headings and their cached TOC
+          entries are corrected in a single pass.
+        * Body-text typos (``Metrci``, ``arias``, ``NB**`` notation).
+        * Removal of the "Dropdown Options" form-control (SDT) on the cover page.
+        """
+        all_fixes = _HEADING_TEXT_FIXES + _BODY_TEXT_FIXES
+        body = doc.element.body
+
+        # Pass 1: simple per-<w:t> replacements
+        for t_el in body.iter(qn("w:t")):
+            if not t_el.text:
+                continue
+            for old, new in all_fixes:
+                if old in t_el.text:
+                    t_el.text = t_el.text.replace(old, new)
+
+        # Pass 2: "CuRrently" split-run case — template stores it as three
+        # consecutive runs: "Cu" | "R" | "rently …".  Detect by checking
+        # neighbours within the same paragraph.
+        for p_elem in body.iter(qn("w:p")):
+            wts = list(p_elem.iter(qn("w:t")))
+            for i, t_el in enumerate(wts):
+                if t_el.text != "R":
+                    continue
+                prev = wts[i - 1].text if i > 0 else ""
+                nxt = wts[i + 1].text if i + 1 < len(wts) else ""
+                if (prev or "").endswith("Cu") and (nxt or "").startswith("rently"):
+                    t_el.text = "r"
+
+        # Pass 3: remove "Dropdown Options" structured-document-tags (SDTs).
+        # These are form-control artefacts on the cover page that render as
+        # visible text in some Word versions.
+        for sdt in list(body.iter(qn("w:sdt"))):
+            sdt_text = "".join(t.text or "" for t in sdt.iter(qn("w:t")))
+            if "Dropdown" in sdt_text:
+                parent = sdt.getparent()
+                if parent is not None:
+                    parent.remove(sdt)
+
+        logger.debug("doc_builder.template_artifacts_normalized")
+
     def build(
         self,
         sections: list[tuple[str, str]],
         output_dir: Path,
         diagram_images: dict[str, bytes] | None = None,
         project_context: dict | None = None,
+        include_architect_review: bool = False,
     ) -> str:
         """Inject sections into template headings and save DOCX.
 
@@ -482,13 +554,25 @@ class DocumentBuilder:
             project_context: Full project context dict from the API request (client,
                 project_name, scope, industry, services …).  Used to populate
                 Company Profile, In Scope Application, and Acceptance Criteria tables.
+            include_architect_review: When ``False`` (default) the ``ARCHITECT
+                REVIEW`` section is stripped from *sections* before injection.
+                Set to ``True`` to retain it as an internal audit trail — it
+                should never be present in a customer-facing deliverable.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         output_name = f"output_{uuid4().hex}.docx"
         output_path = output_dir / output_name
 
+        if not include_architect_review:
+            sections = [
+                (name, content)
+                for name, content in sections
+                if name != "ARCHITECT REVIEW"
+            ]
+
         doc = self._load_or_create_template()
         self._substitute_names(doc)
+        self._normalize_template_artifacts(doc)
         self._fill_project_tables(doc, project_context=project_context)
 
         if self.template_path.exists():
