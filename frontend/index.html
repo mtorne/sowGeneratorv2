@@ -558,19 +558,33 @@
           <textarea name="impdetails" class="input-field" placeholder="Technical constraints, OCI services, specifics..." required></textarea>
         </div>
 
-        <!-- Diagram Upload -->
+        <!-- Current State Diagrams -->
         <div class="field-box">
           <div class="field-label">
-            <i class="fas fa-image"></i>
-            Architecture Diagram
+            <i class="fas fa-sitemap"></i>
+            Current Architecture
           </div>
-          <div class="upload-compact" id="diagramWrapper">
-            <input type="file" name="diagram" id="diagramFile" accept="image/*">
-            <div id="diagramContent">
+          <div class="upload-compact" id="currentDiagramWrapper">
+            <input type="file" name="current_diagram" id="currentDiagramFile" accept="image/*" multiple>
+            <div id="currentDiagramContent">
               <i class="fas fa-cloud-upload-alt"></i>
-              <div class="upload-label">Click to upload (optional)</div>
+              <div class="upload-label">Upload current-state diagrams (optional, multi)</div>
             </div>
-            <div id="diagramPreview" style="display: none;"></div>
+          </div>
+        </div>
+
+        <!-- Target State Diagrams -->
+        <div class="field-box">
+          <div class="field-label">
+            <i class="fas fa-drafting-compass"></i>
+            Target Architecture
+          </div>
+          <div class="upload-compact" id="targetDiagramWrapper">
+            <input type="file" name="target_diagram" id="targetDiagramFile" accept="image/*" multiple>
+            <div id="targetDiagramContent">
+              <i class="fas fa-cloud-upload-alt"></i>
+              <div class="upload-label">Upload target-state diagrams (optional, multi)</div>
+            </div>
           </div>
         </div>
 
@@ -585,6 +599,24 @@
             <div id="templateContent">
               <i class="fas fa-file-upload"></i>
               <div class="upload-label">DOCX template (optional)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Architect Review Toggle -->
+        <div class="field-box full-width">
+          <div style="display:flex; align-items:center; gap:14px; padding:14px 16px; background:#f8fafc; border-radius:10px; border:1px solid var(--border);">
+            <div class="form-check form-switch mb-0" style="display:flex; align-items:center; gap:12px;">
+              <input class="form-check-input" type="checkbox" name="include_architect_review" id="includeArchitectReview" value="true" style="width:2.5em; height:1.4em; cursor:pointer; margin:0;">
+              <label class="form-check-label" for="includeArchitectReview" style="cursor:pointer; margin:0;">
+                <span style="font-weight:600; color:var(--text-primary); font-size:0.9rem;">
+                  <i class="fas fa-user-tie me-1" style="color:var(--accent-green);"></i>
+                  Include Architect Review
+                </span>
+                <span style="color:var(--text-muted); font-size:0.8rem; display:block; margin-top:2px;">
+                  Appends an internal quality assessment, data gaps &amp; next steps (exclude for customer delivery)
+                </span>
+              </label>
             </div>
           </div>
         </div>
@@ -715,7 +747,42 @@
       });
     }
 
-    setupUpload('diagramFile', 'diagramWrapper', 'diagramContent');
+    // Multi-file upload handler (current/target diagram zones)
+    function setupMultiUpload(inputId, wrapperId, contentId) {
+      const input = document.getElementById(inputId);
+      const wrapper = document.getElementById(wrapperId);
+      const content = document.getElementById(contentId);
+
+      input.addEventListener('change', function(e) {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+        wrapper.classList.add('active');
+
+        if (files.length === 1 && files[0].type.startsWith('image/')) {
+          // Single image → show preview thumbnail
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            content.innerHTML = `
+              <i class="fas fa-check-circle"></i>
+              <div class="upload-label">${files[0].name}</div>
+              <img src="${ev.target.result}" class="preview-thumb">
+            `;
+          };
+          reader.readAsDataURL(files[0]);
+        } else {
+          // Multiple files → show count + file name badges
+          const badges = files.map(f => `<span class="file-badge">${f.name}</span>`).join(' ');
+          content.innerHTML = `
+            <i class="fas fa-check-circle"></i>
+            <div class="upload-label">${files.length} diagram${files.length > 1 ? 's' : ''} selected</div>
+            <div style="margin-top:8px; line-height:2;">${badges}</div>
+          `;
+        }
+      });
+    }
+
+    setupMultiUpload('currentDiagramFile', 'currentDiagramWrapper', 'currentDiagramContent');
+    setupMultiUpload('targetDiagramFile', 'targetDiagramWrapper', 'targetDiagramContent');
     setupUpload('templateFile', 'templateWrapper', 'templateContent');
 
     // Alert Toast

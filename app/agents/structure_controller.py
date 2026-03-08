@@ -41,12 +41,20 @@ CANONICAL_STRUCTURE = [
     # is the Heading 3 parent. The LLM writes the introductory body content;
     # HA and MC are static Heading 4 subsections patched in by
     # scripts/patch_template_headings.py.
-    # Optional subsections (e.g. BACKUP, DISASTER RECOVERY) can be added here
-    # when in scope; add a matching static_section .md and Heading 4 in the
-    # DOCX template via the patch script's SUBSECTIONS list.
     "IMPLEMENTATION DETAILS",
+    # ── Milestone Plan ──────────────────────────────────────────────────────
+    # LLM-generated project phase plan derived from the gap between current
+    # and target architecture.  Placed after implementation details so the
+    # reader sees the delivery roadmap immediately after the technical spec.
+    "MILESTONE PLAN",
     "SECURITY",
+    # ── Operative sections — LLM-generated from diagram analysis ──────────
+    # HIGH AVAILABILITY, BACKUP STRATEGY, and DISASTER RECOVERY are all
+    # written by the LLM using the architecture_analysis context so the
+    # content reflects the actual components identified in the diagrams.
     "HIGH AVAILABILITY",
+    "BACKUP STRATEGY",
+    "DISASTER RECOVERY",
     "MANAGED SERVICES CONFIGURATION",
     # ── Architect Review ───────────────────────────────────────────────────
     # Final section providing generation quality feedback, unknown data gaps,
@@ -67,8 +75,7 @@ STATIC_SECTIONS = {
     # is handled by the separate CURRENT STATE ARCHITECTURE DESCRIPTION section.
     "CURRENT STATE ARCHITECTURE",
     "SECURITY",                        # standard OCI security boilerplate
-    # Implementation Details subsections — scope-independent boilerplate
-    "HIGH AVAILABILITY",               # standard HA design patterns
+    # HIGH AVAILABILITY is now LLM-generated (diagram-aware) — removed from static.
     "MANAGED SERVICES CONFIGURATION",  # standard OKE/managed services config
     "CLOSING FEEDBACK",                # post-project human fill, no RAG value
 }

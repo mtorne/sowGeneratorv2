@@ -71,6 +71,16 @@
       </div>
     </div>
 
+    <div class="field" style="margin-top:8px;">
+      <label style="display:flex; align-items:center; gap:10px; font-weight:normal; cursor:pointer;">
+        <input type="checkbox" id="includeArchitectReview" style="width:18px; height:18px; cursor:pointer; accent-color:#2563eb;">
+        <span>
+          <strong>Include Architect Review section</strong>
+          <span class="hint" style="display:block;">Adds internal quality assessment, data gaps &amp; next steps (exclude for customer delivery)</span>
+        </span>
+      </label>
+    </div>
+
     <div class="actions">
       <button type="button" id="generateBtn">Generate SoW</button>
       <select id="downloadType">
@@ -228,6 +238,9 @@
       targetSlots.getFiles().forEach(function(f) {
         formData.append('target_architecture_images', f, f.name);
       });
+      if (document.getElementById('includeArchitectReview').checked) {
+        formData.append('include_architect_review', 'true');
+      }
 
       setStatus(`Posting multipart request to ${path} ...`);
       try {
