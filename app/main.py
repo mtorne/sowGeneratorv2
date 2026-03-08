@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from app.agents.architecture_vision import ArchitectureVisionAgent
@@ -271,18 +271,251 @@ def _diagram_analysis_notes(section: str, context: dict[str, Any]) -> str:
     return " ".join(notes)
 
 
+async def _run_sow_pipeline(
+    context: dict[str, Any],
+    current_architecture_images: list[UploadFile],
+    target_architecture_images: list[UploadFile],
+    project_root: Path,
+) -> tuple[list[tuple[str, str]], str, dict[str, list[tuple[str, bytes]]]]:
+    """Core SoW generation pipeline shared by all generation endpoints.
+
+    Args:
+        context: Project context dict (client, project_name, cloud, scope, …).
+            **Mutated in-place** to add ``architecture_analysis`` and
+            ``inferred_metadata`` keys during execution.
+        current_architecture_images: Uploaded current-state diagram files.
+        target_architecture_images: Uploaded target-state diagram files.
+        project_root: Absolute path to the ``app/`` directory.
+
+    Returns:
+        A 3-tuple of:
+        * ``drafted_sections`` – list of (section_name, content) pairs in
+          canonical order, ready for DocBuilder injection.
+        * ``reviewed`` – assembled + QA-reviewed plain-text document.
+        * ``diagram_image_bytes`` – mapping from ``"current"`` / ``"target"``
+          to a list of ``(filename, bytes)`` tuples for DOCX image embedding.
+    """
+    writer = WriterAgent()
+    qa = QAAgent()
+    architecture_vision = ArchitectureVisionAgent(llm_client=_build_multimodal_client())
+
+    architecture_analysis: dict[str, Any] = {}
+    diagram_image_bytes: dict[str, list[tuple[str, bytes]]] = {}
+    _vision_inputs: list[tuple] = []
+    current_valid = [f for f in (current_architecture_images or []) if f.filename]
+    target_valid = [f for f in (target_architecture_images or []) if f.filename]
+    if current_valid:
+        _vision_inputs.append((current_valid, "current"))
+    if target_valid:
+        _vision_inputs.append((target_valid, "target"))
+
+    if _vision_inputs:
+        _t0_vision = time.monotonic()
+        logger.info("workflow.vision_parallel_start diagrams=%d", len(_vision_inputs))
+
+        async def _run_vision(
+            upload_files: list, role: str
+        ) -> tuple[str, dict[str, Any], list[tuple[str, bytes]]]:
+            file_data: list[tuple[str, bytes]] = []
+            for uf in upload_files:
+                file_bytes = await uf.read()
+                await uf.seek(0)
+                file_data.append((uf.filename or f"image_{len(file_data)}.png", file_bytes))
+            result = await asyncio.to_thread(
+                architecture_vision.analyze_many,
+                file_data,
+                role,
+            )
+            return role, result, file_data
+
+        vision_results = await asyncio.gather(
+            *[_run_vision(ufs, role) for ufs, role in _vision_inputs]
+        )
+        logger.info(
+            "workflow.vision_parallel_complete elapsed=%.1fs diagrams=%d",
+            time.monotonic() - _t0_vision,
+            len(_vision_inputs),
+        )
+
+        for role, result, file_data in vision_results:
+            arch_error = result.get("architecture_extraction", {}).get("error")
+            if arch_error:
+                logger.warning(
+                    "ArchitectureVisionAgent (%s) failed — diagram context skipped: %s",
+                    role,
+                    arch_error.get("message", arch_error),
+                )
+            else:
+                architecture_analysis[role] = result
+            # Always retain all image bytes for DOCX placeholder embedding,
+            # even when vision analysis fails.
+            if file_data:
+                diagram_image_bytes[role] = file_data
+
+    if architecture_analysis:
+        context["architecture_analysis"] = architecture_analysis
+
+    # ── Metadata inference ──────────────────────────────────────────────
+    # LLM call to extract structured customer/project/architecture metadata
+    # used to fill Company Profile, App Details, DB Tier, App Tier, and BOM
+    # tables in the DOCX.  Runs synchronously (fast, single LLM call).
+    logger.info("Swarm flow step: MetadataInferenceAgent")
+    _t0_meta = time.monotonic()
+    metadata_inference = MetadataInferenceAgent()
+    inferred_metadata = await asyncio.to_thread(metadata_inference.infer, context)
+    logger.info(
+        "workflow.metadata_inference_complete elapsed=%.1fs keys=%s bom=%d",
+        time.monotonic() - _t0_meta,
+        list(inferred_metadata.keys()),
+        len(inferred_metadata.get("oci_bom") or []),
+    )
+    context["inferred_metadata"] = inferred_metadata
+
+    logger.info("Swarm flow step: ArchitectureContextBuilder")
+
+    structure = StructureController(template_root=project_root / "templates")
+    rag_service = SectionAwareRAGService.from_env()
+
+    strict_rag_indexing = os.getenv("RAG_STRICT_INDEXING", "false").casefold() == "true"
+    logger.info("workflow.rag_start strict=%s", strict_rag_indexing)
+    if strict_rag_indexing:
+        indexed_count = rag_service.refresh_from_env()
+        logger.info("workflow.rag_count indexed_count=%s", indexed_count)
+        if indexed_count == 0:
+            raise ValueError("CRITICAL: No documents indexed - cannot generate with RAG")
+        diagnostic_ok = rag_service.diagnose_vector_store()
+        if not diagnostic_ok:
+            raise ValueError("CRITICAL: Vector store empty after indexing")
+    else:
+        rag_service.clear_cache()
+        logger.info("workflow.rag_cache_cleared strict=false skipping count and diagnostic")
+
+    # Phase 2: Fan-out RAG retrieval for all dynamic sections in parallel.
+    # OCI KB calls are blocking I/O; asyncio.to_thread runs each in the default
+    # thread-pool executor so the event loop stays responsive.  A semaphore caps
+    # concurrency at RAG_CONCURRENCY (default 4) to stay within OCI rate limits.
+    dynamic_sections = [s for s in structure.sections() if not structure.is_static(s)]
+    _t0_rag = time.monotonic()
+    logger.info(
+        "workflow.rag_parallel_start sections=%d concurrency=%d",
+        len(dynamic_sections),
+        _RAG_CONCURRENCY,
+    )
+
+    _rag_sem = asyncio.Semaphore(_RAG_CONCURRENCY)
+
+    async def _fetch_rag(sec: str) -> tuple[str, list]:
+        async with _rag_sem:
+            return sec, await asyncio.to_thread(
+                rag_service.retrieve_section_context,
+                section=sec,
+                project_data=context,
+            )
+
+    rag_map: dict[str, list] = dict(
+        await asyncio.gather(*[_fetch_rag(s) for s in dynamic_sections])
+    )
+    logger.info(
+        "workflow.rag_parallel_complete elapsed=%.1fs sections=%d",
+        time.monotonic() - _t0_rag,
+        len(dynamic_sections),
+    )
+
+    # Extract target diagram components once; passed to WriterAgent for the
+    # ARCHITECTURE COMPONENTS section so the LLM uses only real services.
+    _target_arch = (
+        context.get("architecture_analysis", {})
+        .get("target", {})
+        .get("architecture_extraction", {})
+    )
+    _diagram_components: dict | None = _target_arch.get("components") or None
+
+    # Assemble sections in canonical order using pre-fetched RAG context.
+    logger.info("Swarm flow step: StructureController")
+    drafted_sections: list[tuple[str, str]] = []
+    for section in structure.sections():
+        if structure.is_static(section):
+            logger.info("Swarm flow step: section=%s static template injection", section)
+            section_content = structure.inject_template(section)
+        else:
+            rag_context = rag_map[section]
+            logger.info(
+                "Swarm flow step: section=%s retrieve_by_section returned %d chunks",
+                section,
+                len(rag_context),
+            )
+            # Pass diagram components only for the ARCHITECTURE COMPONENTS section.
+            _section_diagram_components = (
+                _diagram_components if section == "ARCHITECTURE COMPONENTS" else None
+            )
+            if len(rag_context) == 0:
+                if strict_rag_indexing:
+                    logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
+                    section_content = "[ERROR: No relevant documents found - cannot generate this section]"
+                else:
+                    fallback = _load_fallback_context(project_root, section)
+                    if fallback:
+                        logger.warning(
+                            "section=%s ZERO_CHUNKS - using static fallback as synthetic RAG example",
+                            section,
+                        )
+                        rag_context = [fallback]
+                    else:
+                        logger.warning(
+                            "section=%s ZERO_CHUNKS - generating from context only (no RAG examples)",
+                            section,
+                        )
+                    section_content = writer.write_section(
+                        section_name=section,
+                        context=context,
+                        rag_context=rag_context,
+                        disallowed_services=_disallowed_services(context),
+                        diagram_components=_section_diagram_components,
+                    )
+            else:
+                disallowed = _disallowed_services(context)
+                section_content = writer.write_section(
+                    section_name=section,
+                    context=context,
+                    rag_context=rag_context,
+                    disallowed_services=disallowed,
+                    diagram_components=_section_diagram_components,
+                )
+
+            disallowed = _disallowed_services(context)
+            if disallowed:
+                mentioned = _mentioned_services(section_content)
+                invalid_services = [svc for svc in mentioned if svc in set(disallowed)]
+                if invalid_services:
+                    logger.warning(
+                        "section=%s contains disallowed services despite prompt constraint: %s",
+                        section,
+                        ", ".join(sorted(invalid_services)),
+                    )
+
+        # Log diagram analysis notes for diagnostics — but do NOT append
+        # them to section_content; metadata must not appear in the DOCX.
+        diag_notes = _diagram_analysis_notes(section, context)
+        if diag_notes:
+            logger.debug("section=%s diagram_analysis_notes=%s", section, diag_notes)
+        drafted_sections.append((section, section_content))
+
+    assembled = _assemble_document(drafted_sections)
+    logger.info("Swarm flow step: QAAgent (light validation)")
+    reviewed = qa.review_document(assembled)
+
+    return drafted_sections, reviewed, diagram_image_bytes
+
+
 @app.post("/generate-sow", response_model=SowOutput)
 async def generate_sow(
     request: Request,
     project_data: str | None = Form(None),
     current_architecture_images: list[UploadFile] = File(default=[]),
     target_architecture_images: list[UploadFile] = File(default=[]),
+    include_architect_review: str | None = Form(None),
 ) -> SowOutput:
     """Generate SoW DOCX and Markdown files using deterministic section orchestration."""
-
-    writer = WriterAgent()
-    qa = QAAgent()
-    architecture_vision = ArchitectureVisionAgent(llm_client=_build_multimodal_client())
 
     try:
         content_type = (request.headers.get("content-type") or "").lower()
@@ -299,212 +532,12 @@ async def generate_sow(
             payload_model = SowInput(**json.loads(payload_raw))
 
         context: dict[str, Any] = payload_model.model_dump()
-
-        architecture_analysis: dict[str, Any] = {}
-        diagram_image_bytes: dict[str, bytes] = {}
-        _vision_inputs: list[tuple] = []
-        current_valid = [f for f in (current_architecture_images or []) if f.filename]
-        target_valid = [f for f in (target_architecture_images or []) if f.filename]
-        if current_valid:
-            _vision_inputs.append((current_valid, "current"))
-        if target_valid:
-            _vision_inputs.append((target_valid, "target"))
-
-        if _vision_inputs:
-            _t0_vision = time.monotonic()
-            logger.info("workflow.vision_parallel_start diagrams=%d", len(_vision_inputs))
-
-            async def _run_vision(
-                upload_files: list, role: str
-            ) -> tuple[str, dict[str, Any], bytes]:
-                file_data: list[tuple[str, bytes]] = []
-                for uf in upload_files:
-                    file_bytes = await uf.read()
-                    await uf.seek(0)
-                    file_data.append((uf.filename or f"image_{len(file_data)}.png", file_bytes))
-                result = await asyncio.to_thread(
-                    architecture_vision.analyze_many,
-                    file_data,
-                    role,
-                )
-                primary_bytes = file_data[0][1] if file_data else b""
-                return role, result, primary_bytes
-
-            vision_results = await asyncio.gather(
-                *[_run_vision(ufs, role) for ufs, role in _vision_inputs]
-            )
-            logger.info(
-                "workflow.vision_parallel_complete elapsed=%.1fs diagrams=%d",
-                time.monotonic() - _t0_vision,
-                len(_vision_inputs),
-            )
-
-            for role, result, primary_bytes in vision_results:
-                arch_error = result.get("architecture_extraction", {}).get("error")
-                if arch_error:
-                    logger.warning(
-                        "ArchitectureVisionAgent (%s) failed — diagram context skipped: %s",
-                        role,
-                        arch_error.get("message", arch_error),
-                    )
-                else:
-                    architecture_analysis[role] = result
-                # Always retain primary image bytes for DOCX placeholder embedding.
-                if primary_bytes:
-                    diagram_image_bytes[role] = primary_bytes
-
-        if architecture_analysis:
-            context["architecture_analysis"] = architecture_analysis
-
-        # ── Metadata inference ──────────────────────────────────────────────
-        # LLM call to extract structured customer/project/architecture metadata
-        # used to fill Company Profile, App Details, DB Tier, App Tier, and BOM
-        # tables in the DOCX.  Runs synchronously (fast, single LLM call).
-        logger.info("Swarm flow step: MetadataInferenceAgent")
-        _t0_meta = time.monotonic()
-        metadata_inference = MetadataInferenceAgent()
-        inferred_metadata = await asyncio.to_thread(metadata_inference.infer, context)
-        logger.info(
-            "workflow.metadata_inference_complete elapsed=%.1fs keys=%s bom=%d",
-            time.monotonic() - _t0_meta,
-            list(inferred_metadata.keys()),
-            len(inferred_metadata.get("oci_bom") or []),
-        )
-        context["inferred_metadata"] = inferred_metadata
-
-        logger.info("Swarm flow step: ArchitectureContextBuilder")
-
         project_root = Path(__file__).resolve().parent
-        structure = StructureController(template_root=project_root / "templates")
-        rag_service = SectionAwareRAGService.from_env()
+        _include_review = (include_architect_review or "").lower() in ("true", "1", "yes", "on")
 
-        strict_rag_indexing = os.getenv("RAG_STRICT_INDEXING", "false").casefold() == "true"
-        logger.info("workflow.rag_start strict=%s", strict_rag_indexing)
-        if strict_rag_indexing:
-            indexed_count = rag_service.refresh_from_env()
-            logger.info("workflow.rag_count indexed_count=%s", indexed_count)
-            if indexed_count == 0:
-                raise ValueError("CRITICAL: No documents indexed - cannot generate with RAG")
-            diagnostic_ok = rag_service.diagnose_vector_store()
-            if not diagnostic_ok:
-                raise ValueError("CRITICAL: Vector store empty after indexing")
-        else:
-            rag_service.clear_cache()
-            logger.info("workflow.rag_cache_cleared strict=false skipping count and diagnostic")
-
-        # Phase 2: Fan-out RAG retrieval for all dynamic sections in parallel.
-        # OCI KB calls are blocking I/O; asyncio.to_thread runs each in the default
-        # thread-pool executor so the event loop stays responsive.  A semaphore caps
-        # concurrency at RAG_CONCURRENCY (default 4) to stay within OCI rate limits.
-        dynamic_sections = [s for s in structure.sections() if not structure.is_static(s)]
-        _t0_rag = time.monotonic()
-        logger.info(
-            "workflow.rag_parallel_start sections=%d concurrency=%d",
-            len(dynamic_sections),
-            _RAG_CONCURRENCY,
+        drafted_sections, reviewed, diagram_image_bytes = await _run_sow_pipeline(
+            context, current_architecture_images, target_architecture_images, project_root
         )
-
-        _rag_sem = asyncio.Semaphore(_RAG_CONCURRENCY)
-
-        async def _fetch_rag(sec: str) -> tuple[str, list]:
-            async with _rag_sem:
-                return sec, await asyncio.to_thread(
-                    rag_service.retrieve_section_context,
-                    section=sec,
-                    project_data=context,
-                )
-
-        rag_map: dict[str, list] = dict(
-            await asyncio.gather(*[_fetch_rag(s) for s in dynamic_sections])
-        )
-        logger.info(
-            "workflow.rag_parallel_complete elapsed=%.1fs sections=%d",
-            time.monotonic() - _t0_rag,
-            len(dynamic_sections),
-        )
-
-        # Extract target diagram components once; passed to WriterAgent for the
-        # ARCHITECTURE COMPONENTS section so the LLM uses only real services.
-        _target_arch = (
-            context.get("architecture_analysis", {})
-            .get("target", {})
-            .get("architecture_extraction", {})
-        )
-        _diagram_components: dict | None = _target_arch.get("components") or None
-
-        # Assemble sections in canonical order using pre-fetched RAG context.
-        logger.info("Swarm flow step: StructureController")
-        drafted_sections: list[tuple[str, str]] = []
-        for section in structure.sections():
-            if structure.is_static(section):
-                logger.info("Swarm flow step: section=%s static template injection", section)
-                section_content = structure.inject_template(section)
-            else:
-                rag_context = rag_map[section]
-                logger.info(
-                    "Swarm flow step: section=%s retrieve_by_section returned %d chunks",
-                    section,
-                    len(rag_context),
-                )
-                # Pass diagram components only for the ARCHITECTURE COMPONENTS section.
-                _section_diagram_components = (
-                    _diagram_components if section == "ARCHITECTURE COMPONENTS" else None
-                )
-                if len(rag_context) == 0:
-                    if strict_rag_indexing:
-                        logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
-                        section_content = "[ERROR: No relevant documents found - cannot generate this section]"
-                    else:
-                        fallback = _load_fallback_context(project_root, section)
-                        if fallback:
-                            logger.warning(
-                                "section=%s ZERO_CHUNKS - using static fallback as synthetic RAG example",
-                                section,
-                            )
-                            rag_context = [fallback]
-                        else:
-                            logger.warning(
-                                "section=%s ZERO_CHUNKS - generating from context only (no RAG examples)",
-                                section,
-                            )
-                        section_content = writer.write_section(
-                            section_name=section,
-                            context=context,
-                            rag_context=rag_context,
-                            disallowed_services=_disallowed_services(context),
-                            diagram_components=_section_diagram_components,
-                        )
-                else:
-                    disallowed = _disallowed_services(context)
-                    section_content = writer.write_section(
-                        section_name=section,
-                        context=context,
-                        rag_context=rag_context,
-                        disallowed_services=disallowed,
-                        diagram_components=_section_diagram_components,
-                    )
-
-                disallowed = _disallowed_services(context)
-                if disallowed:
-                    mentioned = _mentioned_services(section_content)
-                    invalid_services = [svc for svc in mentioned if svc in set(disallowed)]
-                    if invalid_services:
-                        logger.warning(
-                            "section=%s contains disallowed services despite prompt constraint: %s",
-                            section,
-                            ", ".join(sorted(invalid_services)),
-                        )
-
-            # Log diagram analysis notes for diagnostics — but do NOT append
-            # them to section_content; metadata must not appear in the DOCX.
-            diag_notes = _diagram_analysis_notes(section, context)
-            if diag_notes:
-                logger.debug("section=%s diagram_analysis_notes=%s", section, diag_notes)
-            drafted_sections.append((section, section_content))
-
-        assembled = _assemble_document(drafted_sections)
-        logger.info("Swarm flow step: QAAgent (light validation)")
-        reviewed = qa.review_document(assembled)
 
         logger.info("Swarm flow step: DocBuilder")
         builder = DocumentBuilder(
@@ -517,9 +550,98 @@ async def generate_sow(
             output_dir=project_root,
             diagram_images=diagram_image_bytes or None,
             project_context=context,
+            include_architect_review=_include_review,
         )
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name, markdown_file=markdown_name)
     except Exception as exc:
         logger.exception("SoW generation failed")
+        raise HTTPException(status_code=500, detail="Failed to generate SoW") from exc
+
+
+@app.post("/generate-markdown/")
+async def generate_markdown(
+    customer: str = Form(...),
+    application: str = Form(...),
+    scope: str = Form(default=""),
+    impdetails: str = Form(default=""),
+    llm_provider: str = Form(default=""),
+    vision_provider: str = Form(default=""),
+    file: UploadFile | None = File(default=None),
+    current_diagram: list[UploadFile] = File(default=[]),
+    target_diagram: list[UploadFile] = File(default=[]),
+    include_architect_review: str | None = Form(None),
+) -> PlainTextResponse:
+    """Frontend-facing endpoint that accepts legacy form fields and returns markdown.
+
+    This endpoint mirrors the old ``backend/main.py`` ``/generate-markdown/`` route
+    so the existing frontend can continue using it without changes.  In addition to
+    returning the markdown body as ``text/plain``, it also saves both a DOCX and a
+    Markdown file under ``app/`` so the user can download them via ``/files/{name}``.
+
+    Form fields
+    -----------
+    customer : str
+        Customer / client name (maps to ``context["client"]``).
+    application : str
+        Application / project name.
+    scope : str
+        High-level scope description.
+    impdetails : str
+        Optional implementation details appended to scope.
+    llm_provider / vision_provider : str
+        Accepted but ignored — provider selection is handled via environment config.
+    file : UploadFile | None
+        Optional DOCX template upload (ignored; the server uses its own template).
+    current_diagram : list[UploadFile]
+        One or more current-state architecture diagram images.
+    target_diagram : list[UploadFile]
+        One or more target-state architecture diagram images.
+    include_architect_review : str | None
+        Pass ``"true"`` / ``"1"`` / ``"yes"`` to include the Architect Review section
+        in the generated document.  Defaults to excluded (customer-facing mode).
+    """
+    try:
+        # Build a SoW context dict from the legacy form fields.
+        full_scope = scope.strip()
+        if impdetails.strip():
+            full_scope = f"{full_scope}\n\nImplementation Details:\n{impdetails.strip()}".strip()
+        if not full_scope:
+            full_scope = "To be defined."
+
+        context: dict[str, Any] = {
+            "client": customer,
+            "project_name": application,
+            "cloud": "OCI",
+            "scope": full_scope,
+            "duration": "PENDING TO REVIEW",
+            "industry": None,
+            "services": [],
+        }
+
+        project_root = Path(__file__).resolve().parent
+        _include_review = (include_architect_review or "").lower() in ("true", "1", "yes", "on")
+
+        drafted_sections, reviewed, diagram_image_bytes = await _run_sow_pipeline(
+            context, current_diagram, target_diagram, project_root
+        )
+
+        logger.info("Swarm flow step: DocBuilder (markdown endpoint)")
+        builder = DocumentBuilder(
+            template_path=project_root / "templates" / "sow_template.docx",
+            customer_name=customer,
+            project_name=application,
+        )
+        builder.build(
+            sections=drafted_sections,
+            output_dir=project_root,
+            diagram_images=diagram_image_bytes or None,
+            project_context=context,
+            include_architect_review=_include_review,
+        )
+        builder.build_markdown(full_document=reviewed, output_dir=project_root)
+
+        return PlainTextResponse(content=reviewed)
+    except Exception as exc:
+        logger.exception("SoW generation (markdown endpoint) failed")
         raise HTTPException(status_code=500, detail="Failed to generate SoW") from exc

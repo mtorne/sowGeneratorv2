@@ -13,9 +13,10 @@ Hard limits: ≤ 20 words, ≤ 1 sentence, NO bullet points, NO line breaks, NO 
 {% endif %}
 
 {% if section_name == 'IN SCOPE APPLICATION' %}
-Write 1-2 brief sentences (maximum 40 words total) introducing the application in scope.
-State what the application does and its current deployment context.
-Do NOT write a long description — the table below captures the details.
+Output EXACTLY ONE sentence (≤ 20 words) stating that the table below details the in-scope application.
+Do NOT describe the application. Do NOT mention technical details — the table captures them.
+Example: "The table below details the application in scope for this engagement."
+Hard limits: ≤ 1 sentence, no bullet points, no line breaks, no additional paragraphs.
 {% endif %}
 
 {% if section_name == 'PROJECT OVERVIEW' %}
@@ -190,6 +191,114 @@ Recommendations
 Provide 2-3 technical or process recommendations for this engagement:
 e.g. architecture trade-offs, risk mitigation, governance suggestions.
 Write in professional, concise language. This section is internal — not customer-facing.
+{% endif %}
+
+{% if section_name == 'MILESTONE PLAN' %}
+Write a structured Milestone Plan for this OCI project with EXACTLY 4-6 phases.
+Derive the phases from the gap between the current and target architecture
+(use architecture_analysis in the project data JSON if present).
+
+For each phase use EXACTLY this label format on its own line, then bullets below it:
+Phase 1
+Phase 2
+Phase 3
+… (continue to Phase 4, 5, or 6 as needed)
+
+After each "Phase N" label, write:
+- One sentence naming the phase (e.g. "Discovery & Assessment")
+- 2-4 bullet points (use "– " prefix) covering: key objectives, main deliverables, estimated duration.
+- If duration is not derivable from the project data, write: PENDING TO REVIEW
+
+Phase guidelines (adapt names and scope to the actual project):
+– Phase 1: Discovery & Assessment — validate current state, architecture sign-off, project governance.
+– Phase 2: OCI Landing Zone & Network — tenancy setup, VCN, subnets, IAM, connectivity.
+– Phase 3: Data & Application Migration — workload lift, DB migration, configuration.
+– Phase 4: Testing & Validation — functional, performance, security testing.
+– Phase 5: Go-Live & Cutover — production cut-over, DNS, monitoring go-live (if applicable).
+– Phase 6: Optimisation & Handover — cost tuning, runbook, knowledge transfer (if applicable).
+
+Hard rules: no markdown headings (#), no prose paragraphs before Phase 1.
+{% endif %}
+
+{% if section_name == 'HIGH AVAILABILITY' %}
+Write a concise High Availability design for this OCI deployment.
+Base your response on architecture_analysis.target in the project data JSON (if present).
+
+Use EXACTLY these four sub-topic labels (plain-text, each on its own line):
+OCI HA Capabilities | Redundancy Architecture | Failover Strategy | RTO/RPO Targets
+
+OCI HA Capabilities
+Name the specific OCI constructs leveraged: Fault Domains, Availability Domains,
+Regional Subnets, OCI Load Balancer, OCI Data Guard, etc. Be project-specific.
+
+Redundancy Architecture
+Describe how the target architecture achieves redundancy at each tier:
+compute, database, storage, and network. Reference actual diagram components.
+
+Failover Strategy
+Explain the failover mechanism: automatic vs. manual, DNS-based, or OCI Full Stack DR.
+Include any health checks, instance pool scaling, or standby configuration details.
+
+RTO/RPO Targets
+State the Recovery Time Objective and Recovery Point Objective.
+If not specified in the project data, write: PENDING TO REVIEW
+
+Hard rules: no prose before the first label, no markdown headers, no generic OCI boilerplate.
+Write project-specific content using the architecture diagram analysis.
+{% endif %}
+
+{% if section_name == 'BACKUP STRATEGY' %}
+Write a concise Backup Strategy for this OCI deployment.
+Base your response on architecture_analysis in the project data JSON (both current and target if present).
+
+Use EXACTLY these four sub-topic labels (plain-text, each on its own line):
+Data Backup | Application Backup | Recovery Procedures | Retention Policy
+
+Data Backup
+Identify all data-tier components that require backup (databases, file shares, volumes).
+Name the OCI backup service used for each: OCI Block Volume Backups, MySQL Automated Backups,
+Autonomous DB Backups, Object Storage versioning, etc. Be project-specific.
+
+Application Backup
+Describe how application state is backed up: configuration files, OCI container images (OCIR),
+OKE persistent volumes, Vault secrets. Reference diagram components.
+
+Recovery Procedures
+Summarise the restore procedure: which service initiates recovery, approximate time,
+and any manual steps required. Use numbered steps (1., 2., ...).
+
+Retention Policy
+State backup frequency (e.g. daily, weekly) and retention period for each tier.
+If not specified in the project data, write: PENDING TO REVIEW
+
+Hard rules: no prose before the first label, project-specific content only.
+{% endif %}
+
+{% if section_name == 'DISASTER RECOVERY' %}
+Write a concise Disaster Recovery section for this OCI deployment.
+Base your response on architecture_analysis and project data JSON.
+
+Use EXACTLY these four sub-topic labels (plain-text, each on its own line):
+DR Strategy | Geographic Redundancy | Data Replication | DR Testing Plan
+
+DR Strategy
+State the DR tier (active-passive, active-active, warm standby) and the OCI feature used:
+OCI Full Stack DR, OCI Cross-Region replication, manual failover, etc.
+
+Geographic Redundancy
+Name the OCI Regions and Availability Domains involved in the DR setup.
+Describe how workloads are distributed across the DR topology.
+
+Data Replication
+Explain how data is replicated to the DR site: OCI Data Guard, MySQL InnoDB Cluster,
+Object Storage Cross-Region Replication, Block Volume replication, etc.
+Reference actual architecture components.
+
+DR Testing Plan
+State the frequency of DR drills, recovery procedure documentation location,
+and RTO/RPO targets. If not specified in the project data, write: PENDING TO REVIEW
+
+Hard rules: no prose before the first label, project-specific content only.
 {% endif %}
 
 Project data JSON:

@@ -36,8 +36,11 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
     "ARCHITECTURE DEPLOYMENT OVERVIEW":             "architecture deployment",
     "ARCHITECTURE COMPONENTS":                      "architecture components",
     "IMPLEMENTATION DETAILS":                       "implementation details",
+    "MILESTONE PLAN":                               "milestone plan",
     "SECURITY":                                     "security",
     "HIGH AVAILABILITY":                            "high availability",
+    "BACKUP STRATEGY":                              "backup strategy",
+    "DISASTER RECOVERY":                            "disaster recovery",
     "MANAGED SERVICES CONFIGURATION":               "managed services",
     # Architect review — appended at end when not found in template heading
     "ARCHITECT REVIEW":                             "architect review",
@@ -59,6 +62,11 @@ _FULL_CLEAR_SECTIONS = frozenset({
     # OCI SERVICE SIZING AND AMOUNTS — the template has several generic intro
     # paragraphs; replace them all with the single LLM-generated sentence.
     "OCI SERVICE SIZING AND AMOUNTS",
+    # Operative sections — fully LLM-generated from diagram analysis
+    "MILESTONE PLAN",
+    "HIGH AVAILABILITY",
+    "BACKUP STRATEGY",
+    "DISASTER RECOVERY",
 })
 
 # Sections where LLM content should be injected RIGHT AFTER the heading,
@@ -77,6 +85,11 @@ _LABELED_FORMAT_SECTIONS = frozenset({
     "ARCHITECT REVIEW",
     # Status and next steps uses Completed / Pending labels + bullet lines.
     "STATUS AND NEXT STEPS",
+    # Operative sections — Phase N / sub-topic label format
+    "MILESTONE PLAN",
+    "HIGH AVAILABILITY",
+    "BACKUP STRATEGY",
+    "DISASTER RECOVERY",
 })
 
 # Sections whose LLM output uses hierarchical bullet lines (L1/L2/L3 indentation).
@@ -93,6 +106,8 @@ _SINGLE_SENTENCE_SECTIONS = frozenset({
     "OCI SERVICE SIZING AND AMOUNTS",
     "PROJECT PARTICIPANTS",
     "CURRENTLY USED TECHNOLOGY STACK",
+    # IN SCOPE APPLICATION is table-driven; the LLM writes only a minimal lead-in.
+    "IN SCOPE APPLICATION",
 })
 
 # Known sub-topic label set for LABELED_FORMAT_SECTIONS
@@ -112,6 +127,28 @@ _SUB_TOPIC_LABELS = frozenset({
     # Status and Next Steps sub-sections
     "completed",
     "pending",
+    # Milestone Plan phase labels
+    "phase 1",
+    "phase 2",
+    "phase 3",
+    "phase 4",
+    "phase 5",
+    "phase 6",
+    # High Availability sub-sections
+    "oci ha capabilities",
+    "redundancy architecture",
+    "failover strategy",
+    "rto/rpo targets",
+    # Backup Strategy sub-sections
+    "data backup",
+    "application backup",
+    "recovery procedures",
+    "retention policy",
+    # Disaster Recovery sub-sections
+    "dr strategy",
+    "geographic redundancy",
+    "data replication",
+    "dr testing plan",
 })
 
 # Regex to split prose into sentences at ". " followed by an uppercase letter
@@ -539,7 +576,7 @@ class DocumentBuilder:
         self,
         sections: list[tuple[str, str]],
         output_dir: Path,
-        diagram_images: dict[str, bytes] | None = None,
+        diagram_images: dict[str, list[tuple[str, bytes]]] | dict[str, bytes] | None = None,
         project_context: dict | None = None,
         include_architect_review: bool = False,
     ) -> str:
@@ -548,9 +585,11 @@ class DocumentBuilder:
         Args:
             sections: List of (section_name, content) tuples in canonical order.
             output_dir: Directory where the output DOCX is written.
-            diagram_images: Optional mapping of ``"current"`` / ``"target"`` → raw
-                PNG/JPG bytes of the architecture diagram images to embed in the
-                corresponding placeholder boxes in the template.
+            diagram_images: Optional mapping of ``"current"`` / ``"target"`` to
+                either a list of ``(filename, bytes)`` tuples (multiple diagrams)
+                or a single raw ``bytes`` value (legacy single-image format).
+                All images for each role are embedded in the document with
+                descriptive captions.
             project_context: Full project context dict from the API request (client,
                 project_name, scope, industry, services …).  Used to populate
                 Company Profile, In Scope Application, and Acceptance Criteria tables.
@@ -613,19 +652,36 @@ class DocumentBuilder:
     # Diagram image insertion  (Feature B)
     # ------------------------------------------------------------------
 
-    def _insert_diagram_images(self, doc: Document, diagram_images: dict[str, bytes]) -> None:
+    def _insert_diagram_images(
+        self,
+        doc: Document,
+        diagram_images: dict[str, list[tuple[str, bytes]]] | dict[str, bytes],
+    ) -> None:
         """Replace placeholder images with the actual uploaded architecture diagrams.
 
         Searches for the headings "Current State Architecture - Diagram" and
         "Target Architecture Diagram" in the document, finds the placeholder
-        drawing paragraph that follows each heading (within 10 paragraphs), clears
-        it, and inserts the real image as a 5.5-inch wide inline picture.
+        drawing paragraph that follows each heading (within 10 paragraphs), and
+        inserts all uploaded diagrams for that role with descriptive captions.
+
+        When multiple images are uploaded for a role, all are embedded sequentially.
+        A caption paragraph ("Figure N: …") is added below each image.
 
         Args:
-            diagram_images: Mapping of ``"current"`` or ``"target"`` → raw image bytes.
+            diagram_images: Mapping of ``"current"`` or ``"target"`` to either:
+                * a list of ``(filename, bytes)`` tuples — multiple images, or
+                * a raw ``bytes`` value — single image (legacy format, no caption).
         """
         _DRAWING_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
         _DRAWING_TAG = f"{{{_DRAWING_NS}}}drawing"
+
+        # Normalise to list[tuple[str, bytes]] regardless of input format
+        def _normalise(value) -> list[tuple[str, bytes]]:
+            if isinstance(value, (bytes, bytearray)):
+                return [("diagram.png", bytes(value))]
+            if isinstance(value, list):
+                return [(str(name), bytes(data)) for name, data in value]
+            return []
 
         slot_map = [
             ("current", "current state architecture - diagram"),
@@ -635,9 +691,12 @@ class DocumentBuilder:
         all_paras = doc.paragraphs
 
         for role, keyword in slot_map:
-            image_bytes = diagram_images.get(role)
-            if not image_bytes:
+            raw = diagram_images.get(role)
+            if not raw:
                 logger.debug("doc_builder.diagram_skip role=%s (no image bytes)", role)
+                continue
+            images = _normalise(raw)
+            if not images:
                 continue
 
             # Find the matching heading paragraph
@@ -653,7 +712,7 @@ class DocumentBuilder:
                 )
                 continue
 
-            # Find the first paragraph after the heading that contains a drawing
+            # Find the first placeholder drawing paragraph after the heading
             placeholder_para = None
             search_limit = min(heading_idx + 10, len(all_paras))
             for i in range(heading_idx + 1, search_limit):
@@ -666,14 +725,11 @@ class DocumentBuilder:
                     break
 
             if placeholder_para is None:
-                # No existing placeholder — insert a new empty paragraph right after
-                # the heading and use it as the target.
                 logger.info(
                     "doc_builder.diagram_no_placeholder role=%s — inserting after heading", role
                 )
                 new_p_elem = OxmlElement("w:p")
                 all_paras[heading_idx]._element.addnext(new_p_elem)
-                # Retrieve as Paragraph object
                 placeholder_para = next(
                     (p for p in doc.paragraphs if p._element is new_p_elem), None
                 )
@@ -683,27 +739,62 @@ class DocumentBuilder:
                     )
                     continue
 
-            # Clear existing content, preserving paragraph properties (<w:pPr>)
+            # ── Embed first image in the placeholder slot ──────────────
+            first_name, first_bytes = images[0]
             p_elem = placeholder_para._element
             pPr = p_elem.find(qn("w:pPr"))
-            # Remove all children except pPr
             for child in list(p_elem):
                 if child is not pPr:
                     p_elem.remove(child)
-
-            # Embed the image via python-docx (handles relationship registration)
             try:
                 run = placeholder_para.add_run()
-                run.add_picture(BytesIO(image_bytes), width=Inches(5.5))
+                run.add_picture(BytesIO(first_bytes), width=Inches(5.5))
                 logger.info(
-                    "doc_builder.diagram_image_inserted role=%s bytes=%d",
-                    role,
-                    len(image_bytes),
+                    "doc_builder.diagram_image_inserted role=%s file=%s bytes=%d",
+                    role, first_name, len(first_bytes),
                 )
             except Exception:
                 logger.exception(
-                    "doc_builder.diagram_image_insert_failed role=%s", role
+                    "doc_builder.diagram_image_insert_failed role=%s file=%s", role, first_name
                 )
+
+            # ── Caption for first image (when multiple images are present) ──
+            anchor_elem = placeholder_para._element
+            if len(images) > 1:
+                role_label = "Current State" if role == "current" else "Target"
+                stem = first_name.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
+                caption_text = f"Figure 1: {role_label} Architecture – {stem}"
+                caption_elem = _build_para_elem(caption_text)
+                anchor_elem.addnext(caption_elem)
+                anchor_elem = caption_elem
+
+            # ── Additional images with captions ────────────────────────
+            for idx, (fname, fbytes) in enumerate(images[1:], start=2):
+                try:
+                    new_p_elem = OxmlElement("w:p")
+                    anchor_elem.addnext(new_p_elem)
+                    img_para = next(
+                        (p for p in doc.paragraphs if p._element is new_p_elem), None
+                    )
+                    if img_para is None:
+                        continue
+                    img_run = img_para.add_run()
+                    img_run.add_picture(BytesIO(fbytes), width=Inches(5.5))
+                    logger.info(
+                        "doc_builder.diagram_image_inserted role=%s file=%s bytes=%d",
+                        role, fname, len(fbytes),
+                    )
+                    # Caption below each additional image
+                    role_label = "Current State" if role == "current" else "Target"
+                    stem = fname.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
+                    caption_text = f"Figure {idx}: {role_label} Architecture – {stem}"
+                    caption_elem = _build_para_elem(caption_text)
+                    img_para._element.addnext(caption_elem)
+                    anchor_elem = caption_elem
+                except Exception:
+                    logger.exception(
+                        "doc_builder.diagram_image_insert_failed role=%s file=%s", role, fname
+                    )
 
     # ------------------------------------------------------------------
     # Page break before every Heading 1
