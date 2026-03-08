@@ -34,19 +34,50 @@ class SectionAwareRAGService:
     """RAG service that retrieves context using OCI Knowledge Base search."""
 
     SECTION_QUERY_MAP = {
+        # ── Core SoW sections ─────────────────────────────────────────────────
         "SOW VERSION HISTORY":              "document version history revision changes amendments",
         "STATUS AND NEXT STEPS":            "project status milestones next steps actions timeline",
         "PROJECT PARTICIPANTS":             "project team roles responsibilities stakeholders contacts",
         "IN SCOPE APPLICATION":             "applications systems in scope workloads included services",
         "PROJECT OVERVIEW":                 "project objectives goals background executive summary",
-        "CURRENT STATE ARCHITECTURE":       "current architecture existing infrastructure on-premise legacy systems",
-        "CURRENTLY USED TECHNOLOGY STACK":  "current technology stack software tools databases middleware",
-        "OCI SERVICE SIZING AND AMOUNTS":   "OCI cloud service sizing compute storage license quantities",
-        "FUTURE STATE ARCHITECTURE":        "target architecture future state cloud migration OCI design",
-        "ARCHITECTURE DEPLOYMENT OVERVIEW": "deployment architecture network topology zones regions availability",
-        "ARCHITECTURE COMPONENTS":          "architecture components services networking compute storage security DevOps OCI",
-        "IMPLEMENTATION DETAILS":           "implementation configuration settings networking security compute storage DevOps provisioning",
         "CLOSING FEEDBACK":                 "closing remarks acceptance criteria success metrics feedback",
+        # ── Architecture & technology ─────────────────────────────────────────
+        "CURRENT STATE ARCHITECTURE":               "current architecture existing infrastructure on-premise legacy systems",
+        "CURRENT STATE ARCHITECTURE DESCRIPTION":   "current architecture description existing systems infrastructure on-premise legacy environment",
+        "CURRENTLY USED TECHNOLOGY STACK":          "current technology stack software tools databases middleware programming languages frameworks",
+        "FUTURE STATE ARCHITECTURE":                "target architecture future state cloud migration OCI design modernization",
+        "ARCHITECTURE DEPLOYMENT OVERVIEW":         "deployment architecture network topology zones regions availability cloud infrastructure",
+        "ARCHITECTURE COMPONENTS":                  "architecture components services networking compute storage security DevOps OCI building blocks",
+        "IMPLEMENTATION DETAILS":                   "implementation configuration settings networking security compute storage DevOps provisioning steps",
+        # ── OCI sizing ────────────────────────────────────────────────────────
+        "OCI SERVICE SIZING AND AMOUNTS":   "OCI cloud service sizing compute storage license quantities OCPU memory",
+        # ── Scope ─────────────────────────────────────────────────────────────
+        "SCOPE":                            "project scope deliverables inclusions exclusions boundaries workload application services",
+        # ── Delivery & planning ───────────────────────────────────────────────
+        "MILESTONE PLAN":                   "project milestones delivery plan phases timeline schedule tasks activities workstream",
+        # ── Resilience & continuity ───────────────────────────────────────────
+        "HIGH AVAILABILITY":                "high availability HA fault tolerance redundancy load balancing failover uptime SLA OCI",
+        "BACKUP STRATEGY":                  "backup strategy data protection retention policy recovery point RPO restore OCI Object Storage",
+        "DISASTER RECOVERY":                "disaster recovery DR RTO RPO business continuity failover replication region OCI",
+        # ── Internal review ───────────────────────────────────────────────────
+        "ARCHITECT REVIEW":                 "architect review internal quality assessment data gaps risks assumptions next steps recommendations",
+    }
+
+    # Cross-section fallback: when no KB chunks are tagged with the exact section name,
+    # try retrieving from these related sections (in priority order) before returning empty.
+    _SECTION_FALLBACK_MAP: dict[str, list[str]] = {
+        "SCOPE":                                    ["IN SCOPE APPLICATION", "PROJECT OVERVIEW"],
+        "CURRENT STATE ARCHITECTURE DESCRIPTION":   ["CURRENT STATE ARCHITECTURE", "CURRENTLY USED TECHNOLOGY STACK"],
+        "MILESTONE PLAN":                           ["STATUS AND NEXT STEPS", "PROJECT OVERVIEW"],
+        "HIGH AVAILABILITY":                        ["FUTURE STATE ARCHITECTURE", "ARCHITECTURE DEPLOYMENT OVERVIEW", "CURRENT STATE ARCHITECTURE"],
+        "BACKUP STRATEGY":                          ["FUTURE STATE ARCHITECTURE", "IMPLEMENTATION DETAILS", "CURRENT STATE ARCHITECTURE"],
+        "DISASTER RECOVERY":                        ["FUTURE STATE ARCHITECTURE", "ARCHITECTURE DEPLOYMENT OVERVIEW", "IMPLEMENTATION DETAILS"],
+        "ARCHITECT REVIEW":                         ["PROJECT OVERVIEW", "STATUS AND NEXT STEPS", "CLOSING FEEDBACK"],
+        "ARCHITECTURE COMPONENTS":                  ["FUTURE STATE ARCHITECTURE", "ARCHITECTURE DEPLOYMENT OVERVIEW"],
+        "ARCHITECTURE DEPLOYMENT OVERVIEW":         ["FUTURE STATE ARCHITECTURE", "ARCHITECTURE COMPONENTS"],
+        "IMPLEMENTATION DETAILS":                   ["FUTURE STATE ARCHITECTURE", "ARCHITECTURE COMPONENTS", "CURRENT STATE ARCHITECTURE"],
+        "OCI SERVICE SIZING AND AMOUNTS":           ["FUTURE STATE ARCHITECTURE", "ARCHITECTURE COMPONENTS"],
+        "CURRENTLY USED TECHNOLOGY STACK":          ["CURRENT STATE ARCHITECTURE", "CURRENT STATE ARCHITECTURE DESCRIPTION"],
     }
 
     def __init__(
@@ -147,14 +178,87 @@ class SectionAwareRAGService:
             logger.info("rag.filtered_results section=%s count=%s", section, len(filtered))
 
             if not filtered:
+                fallback_sections = self._SECTION_FALLBACK_MAP.get(section.upper().strip(), [])
+                if fallback_sections:
+                    logger.info(
+                        "rag.no_section_match section=%s available=%s — trying fallbacks=%s",
+                        section,
+                        sorted(found_sections),
+                        fallback_sections,
+                    )
+                    for fallback in fallback_sections:
+                        fallback_chunks = [
+                            doc for doc in all_results
+                            if self._extract_section(doc).casefold() == fallback.casefold()
+                        ]
+                        if fallback_chunks:
+                            logger.info(
+                                "rag.fallback_hit section=%s fallback=%s count=%s",
+                                section,
+                                fallback,
+                                len(fallback_chunks),
+                            )
+                            chunks: list[SectionChunk] = []
+                            for doc in fallback_chunks:
+                                services = self._extract_metadata(doc, "services", [])
+                                if isinstance(services, str):
+                                    services = [services]
+                                chunks.append(
+                                    SectionChunk(
+                                        section=self._extract_section(doc),
+                                        text=self._extract_text(doc),
+                                        client=str(self._extract_metadata(doc, "client", "") or ""),
+                                        industry=str(self._extract_metadata(doc, "industry", "") or ""),
+                                        services=tuple(str(item) for item in services if str(item).strip()),
+                                    )
+                                )
+                            return chunks[: self.top_k]
+                    # No fallback hit in the current result set — do a fresh targeted query
+                    for fallback in fallback_sections:
+                        try:
+                            fallback_response = self._search_via_chat(
+                                query=self._build_semantic_query(fallback, project_data),
+                                top_k=self.top_k,
+                            )
+                            fallback_docs = self._extract_documents(fallback_response)
+                            fb_filtered = [
+                                doc for doc in fallback_docs
+                                if self._extract_section(doc).casefold() == fallback.casefold()
+                            ]
+                            if fb_filtered:
+                                logger.info(
+                                    "rag.fallback_fresh_query_hit section=%s fallback=%s count=%s",
+                                    section,
+                                    fallback,
+                                    len(fb_filtered),
+                                )
+                                chunks = []
+                                for doc in fb_filtered:
+                                    services = self._extract_metadata(doc, "services", [])
+                                    if isinstance(services, str):
+                                        services = [services]
+                                    chunks.append(
+                                        SectionChunk(
+                                            section=self._extract_section(doc),
+                                            text=self._extract_text(doc),
+                                            client=str(self._extract_metadata(doc, "client", "") or ""),
+                                            industry=str(self._extract_metadata(doc, "industry", "") or ""),
+                                            services=tuple(str(item) for item in services if str(item).strip()),
+                                        )
+                                    )
+                                return chunks[: self.top_k]
+                        except Exception:
+                            logger.warning("rag.fallback_query_failed section=%s fallback=%s", section, fallback)
+
                 logger.warning(
-                    "rag.no_section_match section=%s available=%s — returning empty (no cross-section fallback)",
+                    "rag.no_section_match section=%s available=%s fallbacks=%s — returning empty",
                     section,
                     sorted(found_sections),
+                    fallback_sections or "none",
                 )
                 return []
 
-            chunks: list[SectionChunk] = []
+            chunks = []
             for doc in filtered:
                 services = self._extract_metadata(doc, "services", [])
                 if isinstance(services, str):
