@@ -43,14 +43,6 @@ Required JSON schema:
     "streaming": ["string"],
     "on_prem_connectivity": ["string"]
   },
-  "relationships": [
-    {
-      "from": "string",
-      "to": "string",
-      "protocol_or_link": "string",
-      "direction": "string"
-    }
-  ],
   "high_availability_pattern": {
     "multi_ad": "boolean",
     "multi_region": "boolean",
@@ -92,7 +84,6 @@ class ArchitectureVisionAgent:
     EXPECTED_KEYS = {
         "diagram_summary",
         "components",
-        "relationships",
         "high_availability_pattern",
         "confidence_assessment",
     }
@@ -213,7 +204,7 @@ class ArchitectureVisionAgent:
 
     @staticmethod
     def _merge_extractions(extractions: list[dict[str, Any]]) -> dict[str, Any]:
-        """Union components, deduplicate relationships, OR HA flags, pick highest confidence."""
+        """Union components across images, OR HA flags, pick highest confidence."""
         component_keys = [
             "compute", "kubernetes", "databases", "networking", "load_balancers",
             "security", "storage", "streaming", "on_prem_connectivity",
@@ -228,15 +219,6 @@ class ArchitectureVisionAgent:
                         seen.add(item)
                         items.append(item)
             merged_components[key] = items
-
-        seen_rels: set[tuple[str, str]] = set()
-        merged_rels: list[dict[str, Any]] = []
-        for ext in extractions:
-            for rel in ext.get("relationships", []):
-                rel_key = (str(rel.get("from", "")), str(rel.get("to", "")))
-                if rel_key not in seen_rels:
-                    seen_rels.add(rel_key)
-                    merged_rels.append(rel)
 
         ha_merged: dict[str, Any] = {
             "multi_ad": any(ext.get("high_availability_pattern", {}).get("multi_ad") for ext in extractions),
@@ -262,7 +244,6 @@ class ArchitectureVisionAgent:
         return {
             "diagram_summary": best.get("diagram_summary", {}),
             "components": merged_components,
-            "relationships": merged_rels,
             "high_availability_pattern": ha_merged,
             "confidence_assessment": best.get("confidence_assessment", {}),
         }

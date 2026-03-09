@@ -213,7 +213,22 @@ class SectionAwareRAGService:
                                     )
                                 )
                             return chunks[: self.top_k]
-                    # No fallback hit in the current result set — do a fresh targeted query
+                    # No fallback hit in the current result set.
+                    # First check the in-memory cache — the parallel RAG fan-out may have
+                    # already fetched a fallback section as a direct query and cached it.
+                    # Bypassing the cache here caused expensive serial fresh-query latency.
+                    for fallback in fallback_sections:
+                        fb_cache_key = self._cache_key(fallback, project_data)
+                        if fb_cache_key in self._cache and self._cache[fb_cache_key]:
+                            logger.info(
+                                "rag.fallback_cache_shortcut section=%s fallback=%s count=%d",
+                                section,
+                                fallback,
+                                len(self._cache[fb_cache_key]),
+                            )
+                            return self._cache[fb_cache_key][: self.top_k]
+
+                    # Cache missed for all fallbacks — do a fresh targeted OCI KB query.
                     for fallback in fallback_sections:
                         try:
                             fallback_response = self._search_via_chat(
