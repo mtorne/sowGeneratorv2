@@ -147,7 +147,12 @@ class SectionAwareRAGService:
             return self._cache[cache_key]
 
         results = self._retrieve_by_section(section=section, project_data=project_data)
-        self._cache[cache_key] = results
+        # Only cache non-empty results.  An empty result means no matching chunks
+        # were found yet; skipping the cache allows a Phase-2 retry in the
+        # orchestrator (after all primary fetches complete) to benefit from warm
+        # fallback-target caches without finding a stale [] entry here.
+        if results:
+            self._cache[cache_key] = results
         return results
 
     def _retrieve_by_section(self, section: str, project_data: dict[str, Any]) -> list[SectionChunk]:

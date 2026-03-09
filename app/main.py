@@ -427,6 +427,29 @@ async def _run_sow_pipeline(
     rag_map: dict[str, list] = dict(
         await asyncio.gather(*[_fetch_rag(s) for s in dynamic_sections])
     )
+
+    # Phase 2 (warm-cache retry): sections that returned zero chunks in Phase 1
+    # may have lost a race where their fallback target (e.g. FUTURE STATE
+    # ARCHITECTURE) was still being fetched concurrently.  Now that all primaries
+    # are cached, re-run only the empty sections; the cache shortcut in
+    # _retrieve_by_section will fire for any fallback target already in cache.
+    _empty_sections = [s for s in dynamic_sections if not rag_map[s]]
+    if _empty_sections:
+        logger.info(
+            "workflow.rag_phase2_start sections=%d — retrying zero-result with warm cache",
+            len(_empty_sections),
+        )
+        _phase2 = dict(
+            await asyncio.gather(*[_fetch_rag(s) for s in _empty_sections])
+        )
+        rag_map.update(_phase2)
+        _still_empty = [s for s in _empty_sections if not rag_map[s]]
+        logger.info(
+            "workflow.rag_phase2_complete sections=%d still_empty=%d",
+            len(_empty_sections),
+            len(_still_empty),
+        )
+
     logger.info(
         "workflow.rag_parallel_complete elapsed=%.1fs sections=%d",
         time.monotonic() - _t0_rag,
