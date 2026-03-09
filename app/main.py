@@ -98,9 +98,10 @@ async def _log_startup_version() -> None:
         "agreement between " in _CUSTOMER_PREFIX_SUFFIXES,
     )
     logger.info(
-        "startup.config rag_concurrency=%d vision_image_concurrency=%d",
+        "startup.config rag_concurrency=%d vision_image_concurrency=%d writer_concurrency=%d",
         _RAG_CONCURRENCY,
         int(os.getenv("VISION_IMAGE_CONCURRENCY", "2")),
+        _WRITER_CONCURRENCY,
     )
 
 KNOWN_SERVICES = {
@@ -120,6 +121,12 @@ KNOWN_SERVICES = {
 # Keeps concurrency below OCI rate-limit thresholds while still delivering
 # a significant speedup over fully sequential retrieval.
 _RAG_CONCURRENCY = int(os.getenv("RAG_CONCURRENCY", "4"))
+
+# Maximum number of concurrent LLM section-writing calls.
+# OCI Generative AI has per-compartment RPS limits; 4 concurrent calls
+# is a safe default that stays well within typical quotas while cutting
+# wall-clock writer time by ~75% vs fully sequential execution.
+_WRITER_CONCURRENCY = int(os.getenv("WRITER_CONCURRENCY", "4"))
 
 
 class SowInput(BaseModel):
@@ -435,75 +442,98 @@ async def _run_sow_pipeline(
     )
     _diagram_components: dict | None = _target_arch.get("components") or None
 
-    # Assemble sections in canonical order using pre-fetched RAG context.
+    # Phase 2: Fan-out section writing for all sections in parallel.
+    # Each LLM call is a blocking OCI HTTP request; asyncio.to_thread wraps it
+    # so the event loop stays responsive.  A semaphore caps concurrency at
+    # WRITER_CONCURRENCY (default 4) to stay within OCI RPS limits.
     logger.info("Swarm flow step: StructureController")
-    drafted_sections: list[tuple[str, str]] = []
-    for section in structure.sections():
+
+    _writer_sem = asyncio.Semaphore(_WRITER_CONCURRENCY)
+
+    async def _write_one(section: str) -> tuple[str, str]:
+        """Write or inject a single SoW section, returning (name, content)."""
         if structure.is_static(section):
             logger.info("Swarm flow step: section=%s static template injection", section)
-            section_content = structure.inject_template(section)
-        else:
-            rag_context = rag_map[section]
-            logger.info(
-                "Swarm flow step: section=%s retrieve_by_section returned %d chunks",
-                section,
-                len(rag_context),
-            )
-            # Pass diagram components only for the ARCHITECTURE COMPONENTS section.
-            _section_diagram_components = (
-                _diagram_components if section == "ARCHITECTURE COMPONENTS" else None
-            )
-            if len(rag_context) == 0:
-                if strict_rag_indexing:
-                    logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
-                    section_content = "[ERROR: No relevant documents found - cannot generate this section]"
-                else:
-                    fallback = _load_fallback_context(project_root, section)
-                    if fallback:
-                        logger.warning(
-                            "section=%s ZERO_CHUNKS - using static fallback as synthetic RAG example",
-                            section,
-                        )
-                        rag_context = [fallback]
-                    else:
-                        logger.warning(
-                            "section=%s ZERO_CHUNKS - generating from context only (no RAG examples)",
-                            section,
-                        )
-                    section_content = writer.write_section(
-                        section_name=section,
-                        context=context,
-                        rag_context=rag_context,
-                        disallowed_services=_disallowed_services(context),
-                        diagram_components=_section_diagram_components,
-                    )
+            return section, structure.inject_template(section)
+
+        rag_ctx = rag_map[section]
+        logger.info(
+            "Swarm flow step: section=%s retrieve_by_section returned %d chunks",
+            section,
+            len(rag_ctx),
+        )
+
+        # Pass diagram components only for the ARCHITECTURE COMPONENTS section.
+        _section_diagram_components = (
+            _diagram_components if section == "ARCHITECTURE COMPONENTS" else None
+        )
+
+        if len(rag_ctx) == 0:
+            if strict_rag_indexing:
+                logger.error("section=%s ZERO_CHUNKS - Cannot generate accurately", section)
+                return section, "[ERROR: No relevant documents found - cannot generate this section]"
+            fallback = _load_fallback_context(project_root, section)
+            if fallback:
+                logger.warning(
+                    "section=%s ZERO_CHUNKS - using static fallback as synthetic RAG example",
+                    section,
+                )
+                rag_ctx = [fallback]
             else:
-                disallowed = _disallowed_services(context)
-                section_content = writer.write_section(
-                    section_name=section,
-                    context=context,
-                    rag_context=rag_context,
-                    disallowed_services=disallowed,
-                    diagram_components=_section_diagram_components,
+                logger.warning(
+                    "section=%s ZERO_CHUNKS - generating from context only (no RAG examples)",
+                    section,
                 )
 
-            disallowed = _disallowed_services(context)
-            if disallowed:
-                mentioned = _mentioned_services(section_content)
-                invalid_services = [svc for svc in mentioned if svc in set(disallowed)]
-                if invalid_services:
-                    logger.warning(
-                        "section=%s contains disallowed services despite prompt constraint: %s",
-                        section,
-                        ", ".join(sorted(invalid_services)),
-                    )
+        disallowed = _disallowed_services(context)
+        async with _writer_sem:
+            section_content = await asyncio.to_thread(
+                writer.write_section,
+                section_name=section,
+                context=context,
+                rag_context=rag_ctx,
+                disallowed_services=disallowed,
+                diagram_components=_section_diagram_components,
+            )
+
+        if disallowed:
+            mentioned = _mentioned_services(section_content)
+            invalid_services = [svc for svc in mentioned if svc in set(disallowed)]
+            if invalid_services:
+                logger.warning(
+                    "section=%s contains disallowed services despite prompt constraint: %s",
+                    section,
+                    ", ".join(sorted(invalid_services)),
+                )
 
         # Log diagram analysis notes for diagnostics — but do NOT append
         # them to section_content; metadata must not appear in the DOCX.
         diag_notes = _diagram_analysis_notes(section, context)
         if diag_notes:
             logger.debug("section=%s diagram_analysis_notes=%s", section, diag_notes)
-        drafted_sections.append((section, section_content))
+
+        return section, section_content
+
+    _t0_writer = time.monotonic()
+    logger.info(
+        "workflow.writer_parallel_start sections=%d concurrency=%d",
+        len(structure.sections()),
+        _WRITER_CONCURRENCY,
+    )
+    _write_results = await asyncio.gather(*[_write_one(s) for s in structure.sections()])
+    logger.info(
+        "workflow.writer_parallel_complete elapsed=%.1fs sections=%d",
+        time.monotonic() - _t0_writer,
+        len(structure.sections()),
+    )
+
+    # Reassemble in canonical section order.  asyncio.gather preserves
+    # submission order so the dict rebuild is equivalent, but being explicit
+    # about ordering makes the intent clear and guards against future changes.
+    _results_map: dict[str, str] = dict(_write_results)
+    drafted_sections: list[tuple[str, str]] = [
+        (s, _results_map[s]) for s in structure.sections()
+    ]
 
     assembled = _assemble_document(drafted_sections)
     logger.info("Swarm flow step: QAAgent (light validation)")
