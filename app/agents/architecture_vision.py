@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import mimetypes
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
@@ -103,12 +104,18 @@ class ArchitectureVisionAgent:
         model_name: str | None = None,
         timeout_seconds: float | None = None,
         low_confidence_retries: int = 1,
+        image_concurrency: int | None = None,
     ) -> None:
         settings = OCISettings.from_env()
         self.llm_client = llm_client
         self.model_name = model_name or settings.multimodal_model_name
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.timeout_read
         self.low_confidence_retries = max(0, low_confidence_retries)
+        self.image_concurrency = (
+            image_concurrency
+            if image_concurrency is not None
+            else int(os.getenv("VISION_IMAGE_CONCURRENCY", "2"))
+        )
 
     def analyze_many(
         self, files: list[tuple[str, bytes]], diagram_role: str
@@ -128,7 +135,37 @@ class ArchitectureVisionAgent:
         if len(files) == 1:
             return self.analyze(files[0][0], files[0][1], diagram_role)
 
-        results = [self.analyze(fn, content, diagram_role) for fn, content in files]
+        logger.info(
+            "architecture_vision.analyze_many_start role=%s count=%d concurrency=%d",
+            diagram_role,
+            len(files),
+            self.image_concurrency,
+        )
+        with ThreadPoolExecutor(max_workers=self.image_concurrency) as pool:
+            futures = [pool.submit(self.analyze, fn, content, diagram_role) for fn, content in files]
+            results: list[dict[str, Any]] = []
+            for (fn, content), fut in zip(files, futures):
+                try:
+                    results.append(fut.result())
+                except Exception:
+                    logger.exception(
+                        "architecture_vision.analyze_many_image_failed role=%s file=%s",
+                        diagram_role,
+                        fn,
+                    )
+                    results.append(
+                        self._error_result(
+                            diagram_role=diagram_role,
+                            file_name=fn,
+                            fmt="unknown",
+                            size_bytes=len(content),
+                            width=0,
+                            height=0,
+                            error_code="thread_error",
+                            error_message="Image analysis thread raised an exception.",
+                        )
+                    )
+
         valid = [r for r in results if "error" not in r.get("architecture_extraction", {})]
 
         if not valid:
