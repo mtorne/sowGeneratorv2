@@ -116,7 +116,22 @@ Draw facts from the project data JSON (architecture_analysis, sections already w
 {% endif %}
 
 {% if section_name == 'CURRENT STATE ARCHITECTURE DESCRIPTION' %}
-Write a structured, hierarchical description of the current state architecture using BULLET POINTS ONLY.
+Write a structured, hierarchical description of the CURRENT (pre-migration) architecture using BULLET POINTS ONLY.
+
+CRITICAL GROUNDING RULE:
+{% if diagram_components %}
+The current-state architecture diagram was analysed automatically.
+Describe ONLY the components listed below — do NOT include any OCI services, target-state
+components, or anything not present in the current diagram.  The context JSON also contains
+architecture_analysis.target (the future OCI design); ignore it entirely for this section.
+
+Diagram-identified current components (JSON):
+{{ diagram_components | tojson(indent=2) }}
+{% else %}
+Draw facts exclusively from architecture_analysis.current in the project data JSON.
+Do NOT reference architecture_analysis.target or any OCI services — this section
+describes the existing environment before migration, not the future OCI design.
+{% endif %}
 
 Indentation rules — follow exactly (the renderer uses leading spaces to set the indent level):
   "– text"       ← L1 bullet: no leading spaces, dash prefix
@@ -126,18 +141,16 @@ Indentation rules — follow exactly (the renderer uses leading spaces to set th
 Structure by major service or layer (L1), with specific configuration details as sub-bullets (L2/L3).
 Maximum 6 L1 bullets. Each L1 may have 2–4 L2 sub-bullets. Use L3 only for the most critical detail.
 Focus areas: compute platform, container/VM setup, networking, databases, CI/CD, observability, HA/DR.
-Draw facts from architecture_analysis.current in the project data JSON if present.
 
 Do NOT write prose paragraphs, headings, or numbered lists. Bullet points only.
 
 Example format (2–3 levels):
-– Google Kubernetes Engine (GKE)
-  – Autopilot mode across us-central1 (3 availability zones)
-  – Horizontal Pod Autoscaler enabled for all workloads
-– Cloud SQL (PostgreSQL 15)
-  – High-availability with synchronous standby replica
-  – Daily automated backups with 7-day point-in-time retention
-    – Backups stored in multi-region Cloud Storage bucket
+– Azure Kubernetes Service (AKS)
+  – Multi-zone deployment across West Europe (3 availability zones)
+  – Horizontal Pod Autoscaler enabled for application tier
+– Azure SQL Managed Instance
+  – Business Critical tier with synchronous secondary replica
+  – Daily automated backups with 35-day point-in-time retention
 {% endif %}
 
 {% if section_name == 'MANAGED SERVICES CONFIGURATION' %}

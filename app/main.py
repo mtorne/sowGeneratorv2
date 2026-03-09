@@ -424,6 +424,21 @@ async def _run_sow_pipeline(
                 project_data=context,
             )
 
+    # Pre-warm phase: fetch the two most-common fallback targets before the main
+    # parallel gather.  FUTURE STATE ARCHITECTURE is a fallback for 7 sections;
+    # CURRENT STATE ARCHITECTURE for 5.  Pre-warming them ensures every section
+    # that fails its direct lookup finds a warm cache entry instead of issuing a
+    # redundant serial OCI KB query for the same fallback target.
+    # The second call in the main gather below hits the cache immediately (free).
+    _PREWARM = [
+        s for s in ("FUTURE STATE ARCHITECTURE", "CURRENT STATE ARCHITECTURE")
+        if s in set(dynamic_sections)
+    ]
+    if _PREWARM:
+        logger.info("workflow.rag_prewarm_start sections=%s", _PREWARM)
+        await asyncio.gather(*[_fetch_rag(s) for s in _PREWARM])
+        logger.info("workflow.rag_prewarm_complete")
+
     rag_map: dict[str, list] = dict(
         await asyncio.gather(*[_fetch_rag(s) for s in dynamic_sections])
     )
@@ -465,6 +480,15 @@ async def _run_sow_pipeline(
     )
     _diagram_components: dict | None = _target_arch.get("components") or None
 
+    # Current-state diagram components — used to hard-ground CURRENT STATE
+    # ARCHITECTURE DESCRIPTION so the LLM cannot drift into target/OCI services.
+    _current_arch = (
+        context.get("architecture_analysis", {})
+        .get("current", {})
+        .get("architecture_extraction", {})
+    )
+    _current_diagram_components: dict | None = _current_arch.get("components") or None
+
     # Phase 2: Fan-out section writing for all sections in parallel.
     # Each LLM call is a blocking OCI HTTP request; asyncio.to_thread wraps it
     # so the event loop stays responsive.  A semaphore caps concurrency at
@@ -486,10 +510,16 @@ async def _run_sow_pipeline(
             len(rag_ctx),
         )
 
-        # Pass diagram components only for the ARCHITECTURE COMPONENTS section.
-        _section_diagram_components = (
-            _diagram_components if section == "ARCHITECTURE COMPONENTS" else None
-        )
+        # Route diagram components to the section that needs them for grounding.
+        # ARCHITECTURE COMPONENTS → target diagram (what will be built on OCI).
+        # CURRENT STATE ARCHITECTURE DESCRIPTION → current diagram (what exists today).
+        # All other sections receive None (no diagram-level hard constraint).
+        if section == "ARCHITECTURE COMPONENTS":
+            _section_diagram_components = _diagram_components
+        elif section == "CURRENT STATE ARCHITECTURE DESCRIPTION":
+            _section_diagram_components = _current_diagram_components
+        else:
+            _section_diagram_components = None
 
         if len(rag_ctx) == 0:
             if strict_rag_indexing:
