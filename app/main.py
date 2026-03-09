@@ -97,6 +97,11 @@ async def _log_startup_version() -> None:
         len(_CUSTOMER_PREFIX_SUFFIXES),
         "agreement between " in _CUSTOMER_PREFIX_SUFFIXES,
     )
+    logger.info(
+        "startup.config rag_concurrency=%d vision_image_concurrency=%d",
+        _RAG_CONCURRENCY,
+        int(os.getenv("VISION_IMAGE_CONCURRENCY", "2")),
+    )
 
 KNOWN_SERVICES = {
     "oke",
