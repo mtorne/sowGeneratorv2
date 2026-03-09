@@ -424,6 +424,21 @@ async def _run_sow_pipeline(
                 project_data=context,
             )
 
+    # Pre-warm phase: fetch the two most-common fallback targets before the main
+    # parallel gather.  FUTURE STATE ARCHITECTURE is a fallback for 7 sections;
+    # CURRENT STATE ARCHITECTURE for 5.  Pre-warming them ensures every section
+    # that fails its direct lookup finds a warm cache entry instead of issuing a
+    # redundant serial OCI KB query for the same fallback target.
+    # The second call in the main gather below hits the cache immediately (free).
+    _PREWARM = [
+        s for s in ("FUTURE STATE ARCHITECTURE", "CURRENT STATE ARCHITECTURE")
+        if s in set(dynamic_sections)
+    ]
+    if _PREWARM:
+        logger.info("workflow.rag_prewarm_start sections=%s", _PREWARM)
+        await asyncio.gather(*[_fetch_rag(s) for s in _PREWARM])
+        logger.info("workflow.rag_prewarm_complete")
+
     rag_map: dict[str, list] = dict(
         await asyncio.gather(*[_fetch_rag(s) for s in dynamic_sections])
     )
