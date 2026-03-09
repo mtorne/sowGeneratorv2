@@ -51,9 +51,12 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
 # When a section's own heading is absent from the template, insert it immediately
 # after the last paragraph of this sibling section rather than appending at the end.
 # Processed in order — DR anchors to BACKUP STRATEGY which itself anchors to HA.
+# ARCHITECT REVIEW anchors to DISASTER RECOVERY (itself dynamically injected),
+# placing it after DR and before OCI SERVICE SIZING AND AMOUNTS.
 _SECTION_INSERT_AFTER: dict[str, str] = {
     "BACKUP STRATEGY":   "high availability",
     "DISASTER RECOVERY": "backup strategy",
+    "ARCHITECT REVIEW":  "disaster recovery",
 }
 
 # Sections whose template body content should be fully cleared before LLM injection.
