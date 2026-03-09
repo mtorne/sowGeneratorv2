@@ -36,7 +36,8 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
     "ARCHITECTURE DEPLOYMENT OVERVIEW":             "architecture deployment",
     "ARCHITECTURE COMPONENTS":                      "architecture components",
     "IMPLEMENTATION DETAILS":                       "implementation details",
-    "MILESTONE PLAN":                               "milestone plan",
+    # Template uses "Major Project Milestones" — match on that substring.
+    "MILESTONE PLAN":                               "major project milestones",
     "SECURITY":                                     "security",
     "HIGH AVAILABILITY":                            "high availability",
     "BACKUP STRATEGY":                              "backup strategy",
@@ -45,6 +46,14 @@ SECTION_HEADING_KEYWORDS: dict[str, str] = {
     # Architect review — appended at end when not found in template heading
     "ARCHITECT REVIEW":                             "architect review",
     "CLOSING FEEDBACK":                             "closing feedback",
+}
+
+# When a section's own heading is absent from the template, insert it immediately
+# after the last paragraph of this sibling section rather than appending at the end.
+# Processed in order — DR anchors to BACKUP STRATEGY which itself anchors to HA.
+_SECTION_INSERT_AFTER: dict[str, str] = {
+    "BACKUP STRATEGY":   "high availability",
+    "DISASTER RECOVERY": "backup strategy",
 }
 
 # Sections whose template body content should be fully cleared before LLM injection.
@@ -620,8 +629,14 @@ class DocumentBuilder:
                     continue
                 injected = self._inject_section(doc, section_name, content)
                 if not injected:
-                    logger.warning("doc_builder.section_not_found section=%s — appending at end", section_name)
-                    self._append_section(doc, section_name, content)
+                    anchor = _SECTION_INSERT_AFTER.get(section_name.upper())
+                    if anchor:
+                        injected = self._inject_after_known_section(
+                            doc, section_name, content, after_keyword=anchor
+                        )
+                    if not injected:
+                        logger.warning("doc_builder.section_not_found section=%s — appending at end", section_name)
+                        self._append_section(doc, section_name, content)
         else:
             # Fallback: build from scratch
             for section_name, content in sections:
@@ -1774,6 +1789,95 @@ class DocumentBuilder:
         else:
             self._inject_blocks_after_element(anchor_elem, content)
         logger.info("doc_builder.section_injected section=%s blocks=%d", section_name, len(content_blocks))
+        return True
+
+    def _inject_after_known_section(
+        self,
+        doc: Document,
+        section_name: str,
+        content: str,
+        after_keyword: str,
+    ) -> bool:
+        """Insert a brand-new heading + content immediately after a sibling section.
+
+        Used for sections (e.g. BACKUP STRATEGY, DISASTER RECOVERY) that do not
+        have their own heading in the DOCX template but should appear right after
+        a section that does (e.g. HIGH AVAILABILITY).
+
+        The new heading paragraph is built by cloning the paragraph-properties
+        (``<w:pPr>``) of the anchor heading so that template styles (font, colour,
+        spacing, page-break-before) are preserved, while the text run is created
+        fresh.  Returns True on success, False when the anchor cannot be found.
+        """
+        import copy
+        from lxml import etree
+
+        ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        paragraphs = list(doc.paragraphs)
+
+        # Locate the anchor heading.
+        anchor_idx: int | None = None
+        anchor_level = 1
+        for i, para in enumerate(paragraphs):
+            if self._is_heading_style(para) and after_keyword.lower() in para.text.lower():
+                anchor_idx = i
+                anchor_level = self._get_heading_level(para) or 1
+                break
+
+        if anchor_idx is None:
+            logger.warning(
+                "doc_builder.inject_after_anchor_not_found section=%s anchor_keyword=%r",
+                section_name,
+                after_keyword,
+            )
+            return False
+
+        # Find the end of the anchor section (first same-or-higher heading after it).
+        end_idx = len(paragraphs)
+        for i in range(anchor_idx + 1, len(paragraphs)):
+            lvl = self._get_heading_level(paragraphs[i])
+            if lvl is not None and lvl <= anchor_level:
+                end_idx = i
+                break
+
+        # Insert after the last paragraph of the anchor section.
+        insert_after_elem = (
+            paragraphs[end_idx - 1]._element
+            if end_idx > anchor_idx + 1
+            else paragraphs[anchor_idx]._element
+        )
+
+        # Build a new heading element: clone pPr from anchor (preserves style),
+        # attach a fresh text run.
+        source_pPr = paragraphs[anchor_idx]._element.find(f"{{{ns}}}pPr")
+        heading_elem = etree.Element(f"{{{ns}}}p")
+        if source_pPr is not None:
+            heading_elem.append(copy.deepcopy(source_pPr))
+        r_elem = etree.SubElement(heading_elem, f"{{{ns}}}r")
+        t_elem = etree.SubElement(r_elem, f"{{{ns}}}t")
+        t_elem.text = section_name.title()
+
+        insert_after_elem.addnext(heading_elem)
+
+        # Inject body content after the new heading.
+        _use_formatted = section_name.upper() in _LABELED_FORMAT_SECTIONS
+        _use_hierarchical = section_name.upper() in _HIERARCHICAL_BULLET_SECTIONS
+        if _use_formatted:
+            self._inject_formatted_blocks_after_element(heading_elem, content)
+        elif _use_hierarchical:
+            self._inject_hierarchical_bullets_after_element(heading_elem, content)
+        else:
+            self._inject_blocks_after_element(heading_elem, content)
+
+        content_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
+        logger.info(
+            "doc_builder.section_injected_after_anchor section=%s anchor=%r blocks=%d (full_clear%s%s)",
+            section_name,
+            after_keyword,
+            len(content_blocks),
+            ",formatted" if _use_formatted else "",
+            ",hierarchical" if _use_hierarchical else "",
+        )
         return True
 
     def _append_section(self, doc: Document, section_name: str, content: str) -> None:
