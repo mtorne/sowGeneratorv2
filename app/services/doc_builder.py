@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import json as _json
 import logging
 import re
 from io import BytesIO
@@ -103,6 +104,39 @@ _LABELED_FORMAT_SECTIONS = frozenset({
     "BACKUP STRATEGY",
     "DISASTER RECOVERY",
 })
+
+# Sections where the writer emits JSON instead of prose.
+# doc_builder tries to parse the content as JSON and call _inject_structured_section;
+# on parse failure it gracefully falls back to _inject_formatted_blocks_after_element.
+_STRUCTURED_OUTPUT_SECTIONS: frozenset[str] = frozenset({
+    "MILESTONE PLAN",
+    "HIGH AVAILABILITY",
+    "BACKUP STRATEGY",
+    "DISASTER RECOVERY",
+})
+
+# Ordered (field_name, display_label) pairs used by _inject_structured_section
+# for the HA / BACKUP / DR sections.  MILESTONE PLAN uses its own rendering path.
+_STRUCTURED_SECTION_LABELS: dict[str, list[tuple[str, str]]] = {
+    "HIGH AVAILABILITY": [
+        ("oci_ha_capabilities",     "OCI HA Capabilities"),
+        ("redundancy_architecture", "Redundancy Architecture"),
+        ("failover_strategy",       "Failover Strategy"),
+        ("rto_rpo_targets",         "RTO/RPO Targets"),
+    ],
+    "BACKUP STRATEGY": [
+        ("data_backup",         "Data Backup"),
+        ("application_backup",  "Application Backup"),
+        ("recovery_procedures", "Recovery Procedures"),
+        ("retention_policy",    "Retention Policy"),
+    ],
+    "DISASTER RECOVERY": [
+        ("dr_strategy",           "DR Strategy"),
+        ("geographic_redundancy", "Geographic Redundancy"),
+        ("data_replication",      "Data Replication"),
+        ("dr_testing_plan",       "DR Testing Plan"),
+    ],
+}
 
 # Sections whose LLM output uses hierarchical bullet lines (L1/L2/L3 indentation).
 # Each newline-separated line becomes its own paragraph; leading spaces determine
@@ -1202,6 +1236,92 @@ class DocumentBuilder:
                 left_twips = 0
             anchor_elem.addnext(_build_indented_para_elem(stripped, left_twips))
 
+    @staticmethod
+    def _inject_structured_section(anchor_elem, data: dict, section_name: str) -> None:
+        """Render a parsed structured-JSON section as bold labels + bullets.
+
+        Called by :meth:`_inject_labeled_content` when the LLM content is
+        valid JSON for a section in :data:`_STRUCTURED_OUTPUT_SECTIONS`.
+
+        **MILESTONE PLAN** rendering order (per phase, inserted in reverse):
+          ``Phase N`` (bold) → phase name (plain) → bullet items → duration line.
+
+        **HA / BACKUP / DR** rendering order (per sub-topic, inserted in reverse):
+          sub-topic label (bold) → bullet items.
+
+        All items are inserted in reverse order with ``addnext`` so that
+        ``block[0]`` ends up immediately after *anchor_elem*.
+        """
+        upper = section_name.upper()
+
+        if upper == "MILESTONE PLAN":
+            phases = data.get("phases", [])
+            for phase in reversed(phases):
+                label    = phase.get("label", "")
+                name     = phase.get("name", "")
+                bullets  = phase.get("bullets", [])
+                duration = phase.get("duration", "PENDING TO REVIEW")
+                # Duration line — always last bullet under the phase
+                anchor_elem.addnext(_build_para_elem(f"– Duration: {duration}"))
+                # Bullet items (reversed so first item ends up first)
+                for bullet in reversed(bullets):
+                    prefix = "" if bullet.startswith(("–", "-", "•")) else "– "
+                    anchor_elem.addnext(_build_para_elem(prefix + bullet))
+                # Phase name (plain body sentence) above the bullets
+                anchor_elem.addnext(_build_para_elem(name))
+                # Bold phase label at the top of this block
+                anchor_elem.addnext(_build_para_elem(label, bold=True))
+        else:
+            labels = _STRUCTURED_SECTION_LABELS.get(upper, [])
+            for field_name, display_label in reversed(labels):
+                bullets = data.get(field_name, [])
+                for bullet in reversed(bullets):
+                    prefix = "" if bullet.startswith(("–", "-", "•")) else "– "
+                    anchor_elem.addnext(_build_para_elem(prefix + bullet))
+                anchor_elem.addnext(_build_para_elem(display_label, bold=True))
+
+    def _inject_labeled_content(
+        self, anchor_elem, content: str, section_name: str
+    ) -> None:
+        """Route to structured JSON renderer or fall back to text renderer.
+
+        For sections in :data:`_STRUCTURED_OUTPUT_SECTIONS`:
+
+        1. Try to parse *content* as JSON.
+        2. On success → call :meth:`_inject_structured_section`.
+        3. On failure (malformed JSON or unexpected payload) → log a warning
+           and fall back to :meth:`_inject_formatted_blocks_after_element`.
+
+        For all other labeled-format sections, delegates directly to the
+        text renderer without attempting JSON parsing.
+        """
+        upper = section_name.upper()
+        if upper in _STRUCTURED_OUTPUT_SECTIONS:
+            try:
+                # Strip stray markdown code-fence wrappers before parsing.
+                raw = content.strip()
+                raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
+                raw = re.sub(r"\n?```\s*$", "", raw)
+                data = _json.loads(raw.strip())
+                if not isinstance(data, dict):
+                    raise ValueError(
+                        f"expected JSON object, got {type(data).__name__}"
+                    )
+                self._inject_structured_section(anchor_elem, data, section_name)
+                logger.debug(
+                    "doc_builder.structured_injection_ok section=%s", section_name
+                )
+                return
+            except (ValueError, _json.JSONDecodeError) as exc:
+                logger.warning(
+                    "doc_builder.structured_parse_failed section=%s error=%s"
+                    " — falling back to text renderer",
+                    section_name,
+                    exc,
+                )
+        # Non-structured labeled section or JSON parse failure
+        self._inject_formatted_blocks_after_element(anchor_elem, content)
+
     # ------------------------------------------------------------------
     # Table data filling
     # ------------------------------------------------------------------
@@ -1755,7 +1875,7 @@ class DocumentBuilder:
             _use_formatted    = section_name.upper() in _LABELED_FORMAT_SECTIONS
             _use_hierarchical = section_name.upper() in _HIERARCHICAL_BULLET_SECTIONS
             if _use_formatted:
-                self._inject_formatted_blocks_after_element(anchor_elem, content)
+                self._inject_labeled_content(anchor_elem, content, section_name)
             elif _use_hierarchical:
                 self._inject_hierarchical_bullets_after_element(anchor_elem, content)
             else:
@@ -1788,7 +1908,7 @@ class DocumentBuilder:
                 anchor_elem = para._element  # advance anchor past intro para(s)
 
         if section_name.upper() in _LABELED_FORMAT_SECTIONS:
-            self._inject_formatted_blocks_after_element(anchor_elem, content)
+            self._inject_labeled_content(anchor_elem, content, section_name)
         else:
             self._inject_blocks_after_element(anchor_elem, content)
         logger.info("doc_builder.section_injected section=%s blocks=%d", section_name, len(content_blocks))
@@ -1866,7 +1986,7 @@ class DocumentBuilder:
         _use_formatted = section_name.upper() in _LABELED_FORMAT_SECTIONS
         _use_hierarchical = section_name.upper() in _HIERARCHICAL_BULLET_SECTIONS
         if _use_formatted:
-            self._inject_formatted_blocks_after_element(heading_elem, content)
+            self._inject_labeled_content(heading_elem, content, section_name)
         elif _use_hierarchical:
             self._inject_hierarchical_bullets_after_element(heading_elem, content)
         else:
@@ -1892,7 +2012,7 @@ class DocumentBuilder:
         """
         heading = doc.add_heading(section_name.title(), level=1)
         if section_name.upper() in _LABELED_FORMAT_SECTIONS:
-            self._inject_formatted_blocks_after_element(heading._element, content)
+            self._inject_labeled_content(heading._element, content, section_name)
         else:
             for block in content.split("\n\n"):
                 if block.strip():

@@ -208,19 +208,8 @@ Write in professional, concise language. This section is internal — not custom
 
 {% if section_name == 'MILESTONE PLAN' %}
 Write a structured Milestone Plan for this OCI project with EXACTLY 4-6 phases.
-Derive the phases from the gap between the current and target architecture
+Derive the phases from the gap between current and target architecture
 (use architecture_analysis in the project data JSON if present).
-
-For each phase use EXACTLY this label format on its own line, then bullets below it:
-Phase 1
-Phase 2
-Phase 3
-… (continue to Phase 4, 5, or 6 as needed)
-
-After each "Phase N" label, write:
-- One sentence naming the phase (e.g. "Discovery & Assessment")
-- 2-4 bullet points (use "– " prefix) covering: key objectives, main deliverables, estimated duration.
-- If duration is not derivable from the project data, write: PENDING TO REVIEW
 
 Phase guidelines (adapt names and scope to the actual project):
 – Phase 1: Discovery & Assessment — validate current state, architecture sign-off, project governance.
@@ -230,94 +219,135 @@ Phase guidelines (adapt names and scope to the actual project):
 – Phase 5: Go-Live & Cutover — production cut-over, DNS, monitoring go-live (if applicable).
 – Phase 6: Optimisation & Handover — cost tuning, runbook, knowledge transfer (if applicable).
 
-Hard rules: no markdown headings (#), no prose paragraphs before Phase 1.
+Output a JSON object matching this EXACT schema (example with two phases — use 4-6 in your output):
+{
+  "phases": [
+    {
+      "label": "Phase 1",
+      "name": "Discovery & Assessment",
+      "bullets": [
+        "Validate current state architecture and establish project governance",
+        "Architecture sign-off and project kickoff",
+        "Confirm scope and delivery timeline"
+      ],
+      "duration": "2 weeks"
+    },
+    {
+      "label": "Phase 2",
+      "name": "OCI Landing Zone & Network",
+      "bullets": [
+        "Provision OCI tenancy, IAM policies, and compartment structure",
+        "Configure VCN, subnets, and connectivity (FastConnect / VPN)"
+      ],
+      "duration": "PENDING TO REVIEW"
+    }
+  ]
+}
+
+JSON rules:
+- "label" must be exactly "Phase 1", "Phase 2", … (match the phase count).
+- "name" is a short title (≤ 6 words) for the phase.
+- "bullets" contains 2-4 concise action items or deliverables (no bullet-prefix characters).
+- "duration" is the estimated elapsed time (e.g. "2 weeks", "3-4 weeks").
+  If not derivable from the project data, use exactly: "PENDING TO REVIEW"
+- Total phases: 4 to 6.  No extra keys.
 {% endif %}
 
 {% if section_name == 'HIGH AVAILABILITY' %}
 Write a concise High Availability design for this OCI deployment.
 Base your response on architecture_analysis.target in the project data JSON (if present).
 
-Use EXACTLY these four sub-topic labels (plain-text, each on its own line):
-OCI HA Capabilities | Redundancy Architecture | Failover Strategy | RTO/RPO Targets
+Sub-topic content guidelines:
+- oci_ha_capabilities: Name the specific OCI constructs leveraged: Fault Domains, Availability Domains,
+  Regional Subnets, OCI Load Balancer, OCI Data Guard, etc.  Be project-specific.
+- redundancy_architecture: Describe how the target architecture achieves redundancy at each tier:
+  compute, database, storage, and network.  Reference actual diagram components.
+- failover_strategy: Explain the failover mechanism: automatic vs. manual, DNS-based, or OCI Full Stack DR.
+  Include health checks, instance pool scaling, or standby configuration details.
+- rto_rpo_targets: State the Recovery Time Objective and Recovery Point Objective.
+  If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
 
-OCI HA Capabilities
-Name the specific OCI constructs leveraged: Fault Domains, Availability Domains,
-Regional Subnets, OCI Load Balancer, OCI Data Guard, etc. Be project-specific.
+Output a JSON object matching this EXACT schema:
+{
+  "oci_ha_capabilities": ["<bullet>", "..."],
+  "redundancy_architecture": ["<bullet>", "..."],
+  "failover_strategy": ["<bullet>", "..."],
+  "rto_rpo_targets": ["<bullet>", "..."]
+}
 
-Redundancy Architecture
-Describe how the target architecture achieves redundancy at each tier:
-compute, database, storage, and network. Reference actual diagram components.
-
-Failover Strategy
-Explain the failover mechanism: automatic vs. manual, DNS-based, or OCI Full Stack DR.
-Include any health checks, instance pool scaling, or standby configuration details.
-
-RTO/RPO Targets
-State the Recovery Time Objective and Recovery Point Objective.
-If not specified in the project data, write: PENDING TO REVIEW
-
-Hard rules: no prose before the first label, no markdown headers, no generic OCI boilerplate.
-Write project-specific content using the architecture diagram analysis.
+JSON rules:
+- Each field must be a list of 2-4 concise bullet strings (no bullet-prefix characters).
+- Write project-specific content — no generic OCI boilerplate.
+- No extra keys.
 {% endif %}
 
 {% if section_name == 'BACKUP STRATEGY' %}
 Write a concise Backup Strategy for this OCI deployment.
 Base your response on architecture_analysis in the project data JSON (both current and target if present).
 
-Use EXACTLY these four sub-topic labels (plain-text, each on its own line):
-Data Backup | Application Backup | Recovery Procedures | Retention Policy
+Sub-topic content guidelines:
+- data_backup: Identify all data-tier components requiring backup (databases, file shares, volumes).
+  Name the OCI backup service for each: OCI Block Volume Backups, MySQL Automated Backups,
+  Autonomous DB Backups, Object Storage versioning, etc.  Be project-specific.
+- application_backup: Describe how application state is backed up: OCI container images (OCIR),
+  OKE persistent volumes, Vault secrets, configuration files.  Reference diagram components.
+- recovery_procedures: Summarise the restore procedure as numbered steps, e.g.
+  "1. Initiate OCI Block Volume restore from latest snapshot", "2. Verify DB integrity …".
+- retention_policy: State backup frequency (e.g. daily, weekly) and retention period per tier.
+  If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
 
-Data Backup
-Identify all data-tier components that require backup (databases, file shares, volumes).
-Name the OCI backup service used for each: OCI Block Volume Backups, MySQL Automated Backups,
-Autonomous DB Backups, Object Storage versioning, etc. Be project-specific.
+Output a JSON object matching this EXACT schema:
+{
+  "data_backup": ["<bullet>", "..."],
+  "application_backup": ["<bullet>", "..."],
+  "recovery_procedures": ["<numbered step>", "..."],
+  "retention_policy": ["<bullet>", "..."]
+}
 
-Application Backup
-Describe how application state is backed up: configuration files, OCI container images (OCIR),
-OKE persistent volumes, Vault secrets. Reference diagram components.
-
-Recovery Procedures
-Summarise the restore procedure: which service initiates recovery, approximate time,
-and any manual steps required. Use numbered steps (1., 2., ...).
-
-Retention Policy
-State backup frequency (e.g. daily, weekly) and retention period for each tier.
-If not specified in the project data, write: PENDING TO REVIEW
-
-Hard rules: no prose before the first label, project-specific content only.
+JSON rules:
+- Each field must be a list of 2-4 concise strings (no bullet-prefix characters).
+- Write project-specific content only.
+- No extra keys.
 {% endif %}
 
 {% if section_name == 'DISASTER RECOVERY' %}
 Write a concise Disaster Recovery section for this OCI deployment.
 Base your response on architecture_analysis and project data JSON.
 
-Use EXACTLY these four sub-topic labels (plain-text, each on its own line):
-DR Strategy | Geographic Redundancy | Data Replication | DR Testing Plan
+Sub-topic content guidelines:
+- dr_strategy: State the DR tier (active-passive, active-active, warm standby) and the OCI feature
+  used: OCI Full Stack DR, OCI Cross-Region replication, manual failover, etc.
+- geographic_redundancy: Name the OCI Regions and Availability Domains involved.
+  Describe how workloads are distributed across the DR topology.
+- data_replication: Explain how data is replicated to the DR site: OCI Data Guard, MySQL InnoDB Cluster,
+  Object Storage Cross-Region Replication, Block Volume replication, etc.
+  Reference actual architecture components.
+- dr_testing_plan: State the frequency of DR drills, recovery procedure documentation location,
+  and RTO/RPO targets.
+  If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
 
-DR Strategy
-State the DR tier (active-passive, active-active, warm standby) and the OCI feature used:
-OCI Full Stack DR, OCI Cross-Region replication, manual failover, etc.
+Output a JSON object matching this EXACT schema:
+{
+  "dr_strategy": ["<bullet>", "..."],
+  "geographic_redundancy": ["<bullet>", "..."],
+  "data_replication": ["<bullet>", "..."],
+  "dr_testing_plan": ["<bullet>", "..."]
+}
 
-Geographic Redundancy
-Name the OCI Regions and Availability Domains involved in the DR setup.
-Describe how workloads are distributed across the DR topology.
-
-Data Replication
-Explain how data is replicated to the DR site: OCI Data Guard, MySQL InnoDB Cluster,
-Object Storage Cross-Region Replication, Block Volume replication, etc.
-Reference actual architecture components.
-
-DR Testing Plan
-State the frequency of DR drills, recovery procedure documentation location,
-and RTO/RPO targets. If not specified in the project data, write: PENDING TO REVIEW
-
-Hard rules: no prose before the first label, project-specific content only.
+JSON rules:
+- Each field must be a list of 2-4 concise strings (no bullet-prefix characters).
+- Write project-specific content only.
+- No extra keys.
 {% endif %}
 
 Project data JSON:
 {{ context_json }}
 
-Retrieved similar section examples:
+Retrieved similar section examples (content reference only — follow the output format rules above, not the example format):
 {{ examples if examples else 'No retrieved examples available.' }}
 
+{% if json_output %}
+Output ONLY the raw JSON object as specified above. No prose text before or after. No markdown code fences.
+{% else %}
 Output only the section body content. Do not add a title or heading line.
+{% endif %}
