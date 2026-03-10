@@ -254,16 +254,31 @@ JSON rules:
 {% endif %}
 
 {% if section_name == 'HIGH AVAILABILITY' %}
-Write a concise High Availability design for this OCI deployment.
+Write a concise High Availability design for this deployment.
 Base your response on architecture_analysis.target in the project data JSON (if present).
 
+{% if diagram_components %}
+CRITICAL GROUNDING RULE — STRICTLY ENFORCED:
+The target architecture diagram was analysed automatically.
+You MUST use ONLY the services, components, and cloud providers identified in the diagram below.
+Do NOT invent, add, or infer any service not explicitly present in this list.
+If a service you would normally mention (e.g. an OCI or Azure load balancer) is NOT in the diagram,
+do NOT reference it. Stick exclusively to what is present.
+
+Diagram-identified target components (JSON):
+{{ diagram_components | tojson(indent=2) }}
+{% else %}
+Base your response on architecture_analysis.target in the project data JSON.
+Name only services and components that are explicitly mentioned in the project data.
+{% endif %}
+
 Sub-topic content guidelines:
-- oci_ha_capabilities: Name the specific OCI constructs leveraged: Fault Domains, Availability Domains,
-  Regional Subnets, OCI Load Balancer, OCI Data Guard, etc.  Be project-specific.
+- oci_ha_capabilities: Name the specific HA constructs leveraged (e.g. Fault Domains, Availability
+  Domains, Active Data Guard, load balancers) — only from the diagram/project data.
 - redundancy_architecture: Describe how the target architecture achieves redundancy at each tier:
-  compute, database, storage, and network.  Reference actual diagram components.
-- failover_strategy: Explain the failover mechanism: automatic vs. manual, DNS-based, or OCI Full Stack DR.
-  Include health checks, instance pool scaling, or standby configuration details.
+  compute, database, storage, and network. Reference actual diagram components only.
+- failover_strategy: Explain the failover mechanism (automatic vs. manual, DNS-based, Full Stack DR).
+  Include health checks, standby configuration, or replication details as applicable.
 - rto_rpo_targets: State the Recovery Time Objective and Recovery Point Objective.
   If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
 
@@ -277,23 +292,33 @@ Output a JSON object matching this EXACT schema:
 
 JSON rules:
 - Each field must be a list of 2-4 concise bullet strings (no bullet-prefix characters).
-- Write project-specific content — no generic OCI boilerplate.
+- Write project-specific content only — no generic boilerplate or invented services.
 - No extra keys.
 {% endif %}
 
 {% if section_name == 'BACKUP STRATEGY' %}
-Write a concise Backup Strategy for this OCI deployment.
+Write a concise Backup Strategy for this deployment.
 Base your response on architecture_analysis in the project data JSON (both current and target if present).
 
+{% if diagram_components %}
+CRITICAL GROUNDING RULE — STRICTLY ENFORCED:
+Use ONLY the data-tier and application components identified in the diagram below.
+Do NOT reference services not present in this list.
+
+Diagram-identified target components (JSON):
+{{ diagram_components | tojson(indent=2) }}
+{% else %}
+Name only components explicitly mentioned in the project data.
+{% endif %}
+
 Sub-topic content guidelines:
-- data_backup: Identify all data-tier components requiring backup (databases, file shares, volumes).
-  Name the OCI backup service for each: OCI Block Volume Backups, MySQL Automated Backups,
-  Autonomous DB Backups, Object Storage versioning, etc.  Be project-specific.
-- application_backup: Describe how application state is backed up: OCI container images (OCIR),
-  OKE persistent volumes, Vault secrets, configuration files.  Reference diagram components.
+- data_backup: Identify all data-tier components requiring backup (databases, file shares, volumes)
+  that are present in the diagram/project data. Name the backup service for each. Be project-specific.
+- application_backup: Describe how application state is backed up (container images, persistent
+  volumes, secrets, config files). Reference actual diagram components only.
 - recovery_procedures: Summarise the restore procedure as numbered steps, e.g.
-  "1. Initiate OCI Block Volume restore from latest snapshot", "2. Verify DB integrity …".
-- retention_policy: State backup frequency (e.g. daily, weekly) and retention period per tier.
+  "1. Initiate restore from latest snapshot", "2. Verify DB integrity …".
+- retention_policy: State backup frequency and retention period per tier.
   If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
 
 Output a JSON object matching this EXACT schema:
@@ -306,22 +331,33 @@ Output a JSON object matching this EXACT schema:
 
 JSON rules:
 - Each field must be a list of 2-4 concise strings (no bullet-prefix characters).
-- Write project-specific content only.
+- Write project-specific content only — no invented services.
 - No extra keys.
 {% endif %}
 
 {% if section_name == 'DISASTER RECOVERY' %}
-Write a concise Disaster Recovery section for this OCI deployment.
+Write a concise Disaster Recovery section for this deployment.
 Base your response on architecture_analysis and project data JSON.
 
+{% if diagram_components %}
+CRITICAL GROUNDING RULE — STRICTLY ENFORCED:
+Use ONLY the components, services, and cloud providers identified in the diagram below.
+Do NOT reference regions, replication mechanisms, or DR services not present in this list.
+
+Diagram-identified target components (JSON):
+{{ diagram_components | tojson(indent=2) }}
+{% else %}
+Name only services and regions explicitly mentioned in the project data.
+{% endif %}
+
 Sub-topic content guidelines:
-- dr_strategy: State the DR tier (active-passive, active-active, warm standby) and the OCI feature
-  used: OCI Full Stack DR, OCI Cross-Region replication, manual failover, etc.
-- geographic_redundancy: Name the OCI Regions and Availability Domains involved.
-  Describe how workloads are distributed across the DR topology.
-- data_replication: Explain how data is replicated to the DR site: OCI Data Guard, MySQL InnoDB Cluster,
-  Object Storage Cross-Region Replication, Block Volume replication, etc.
-  Reference actual architecture components.
+- dr_strategy: State the DR tier (active-passive, active-active, warm standby) and the specific
+  mechanism used (e.g. Data Guard, Full Stack DR, cross-region replication). Use only what is
+  present in the diagram/project data.
+- geographic_redundancy: Name the specific regions and availability domains involved (from the
+  diagram). Describe how workloads are distributed across the DR topology.
+- data_replication: Explain how data is replicated to the DR site using only mechanisms present
+  in the diagram (Data Guard, InnoDB Cluster, cross-region replication, etc.).
 - dr_testing_plan: State the frequency of DR drills, recovery procedure documentation location,
   and RTO/RPO targets.
   If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
@@ -336,7 +372,7 @@ Output a JSON object matching this EXACT schema:
 
 JSON rules:
 - Each field must be a list of 2-4 concise strings (no bullet-prefix characters).
-- Write project-specific content only.
+- Write project-specific content only — no invented services or regions.
 - No extra keys.
 {% endif %}
 
