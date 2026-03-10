@@ -23,35 +23,45 @@ from pydantic import BaseModel, Field
 # MILESTONE PLAN
 # ---------------------------------------------------------------------------
 
-class MilestonePhase(BaseModel):
-    """A single phase entry inside :class:`MilestonePlanOutput`."""
+class MilestoneEntry(BaseModel):
+    """A single milestone row inside :class:`MilestonePlanOutput`.
 
-    label: str = Field(
+    Matches the template table columns: Milestone | Target Date | Completed | Comments.
+    """
+
+    milestone: str = Field(
         ...,
-        description="Phase identifier, e.g. 'Phase 1', 'Phase 2'.",
+        description=(
+            "Short milestone event name, e.g. 'Project Kick-Off with Oracle Architect', "
+            "'Current State Architecture Diagram provided'."
+        ),
     )
-    name: str = Field(
-        ...,
-        description="Short phase title, e.g. 'Discovery & Assessment'.",
-    )
-    bullets: list[str] = Field(
-        default_factory=list,
-        description="2-4 key tasks or deliverables for this phase (no bullet-prefix characters).",
-    )
-    duration: str = Field(
+    target_date: str = Field(
         default="PENDING TO REVIEW",
-        description="Estimated duration, e.g. '2 weeks'.  Use 'PENDING TO REVIEW' if unknown.",
+        description="Target date (DD-MM-YYYY) or 'PENDING TO REVIEW' if unknown.",
+    )
+    completed: str = Field(
+        default="",
+        description="Completion date (DD-MM-YYYY) — leave empty if not yet completed.",
+    )
+    comments: str = Field(
+        default="",
+        description="Optional brief comment or note about this milestone.",
     )
 
 
 class MilestonePlanOutput(BaseModel):
-    """Structured output for the MILESTONE PLAN section."""
+    """Structured output for the MILESTONE PLAN section.
 
-    phases: list[MilestonePhase] = Field(
+    Produces rows to be appended to the existing template milestone table
+    (Milestone | Target Date | Completed | Comments).
+    """
+
+    milestones: list[MilestoneEntry] = Field(
         ...,
         min_length=4,
-        max_length=6,
-        description="Ordered list of 4-6 project phases.",
+        max_length=8,
+        description="Ordered list of 4-8 project milestones.",
     )
 
 

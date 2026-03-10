@@ -183,13 +183,8 @@ _SUB_TOPIC_LABELS = frozenset({
     # Status and Next Steps sub-sections
     "completed",
     "pending",
-    # Milestone Plan phase labels
-    "phase 1",
-    "phase 2",
-    "phase 3",
-    "phase 4",
-    "phase 5",
-    "phase 6",
+    # (Milestone Plan phase labels removed — milestones are now appended
+    # to the existing template table, not rendered as labelled blocks.)
     # High Availability sub-sections
     "oci ha capabilities",
     "redundancy architecture",
@@ -1261,70 +1256,79 @@ class DocumentBuilder:
                 left_twips = 0
             anchor_elem.addnext(_build_indented_para_elem(stripped, left_twips))
 
-    def _build_milestone_table(self, doc: Document, phases: list[dict]) -> object:
-        """Create a MILESTONE PLAN <w:tbl> element detached from the document body.
+    def _append_milestone_rows(
+        self, doc: Document, milestones: list[dict]
+    ) -> bool:
+        """Append milestone rows to the existing template milestone table.
 
-        The table uses four columns: **Phase** | **Name** | **Key Deliverables** |
-        **Duration**.  A "Table Grid" style is requested (gracefully ignored when
-        not present in the template).  The table element is removed from the
-        temporary document body position so it can be re-inserted at the correct
-        injection point via ``addnext``.
+        Locates the template table by matching the header row pattern
+        ``Milestone | Target Date | Completed | Comments`` and appends one row
+        per milestone entry.  ``PENDING TO REVIEW`` strings in Target Date or
+        Completed cells are rendered in red.
 
-        ``PENDING TO REVIEW`` strings in the Duration column are coloured red to
-        match the convention used elsewhere in the document.
+        Returns True if rows were appended, False if the table was not found.
         """
-        table = doc.add_table(rows=1, cols=4)
-        try:
-            table.style = "Table Grid"
-        except Exception:
-            pass  # style unavailable in some templates — continue without it
+        # Locate the milestone table by header pattern
+        target_table = None
+        for table in doc.tables:
+            if not table.rows:
+                continue
+            hdrs = [
+                cell.text.strip().lower()
+                for cell in table.rows[0].cells
+            ]
+            if "milestone" in hdrs[0] and len(hdrs) >= 4:
+                target_table = table
+                break
 
-        # ── Header row ────────────────────────────────────────────────────────
-        hdr = table.rows[0]
-        for col_idx, label in enumerate(
-            ["Phase", "Name", "Key Deliverables", "Duration"]
-        ):
-            para = hdr.cells[col_idx].paragraphs[0]
-            run = para.add_run(label)
-            run.bold = True
+        if target_table is None:
+            logger.warning("doc_builder.milestone_table_not_found — cannot append rows")
+            return False
 
-        # ── Data rows — one per phase ─────────────────────────────────────────
-        for phase in phases:
-            row = table.add_row()
+        for ms in milestones:
+            row = target_table.add_row()
+            n_cols = len(row.cells)
 
-            # col 0: Phase label
-            row.cells[0].paragraphs[0].add_run(phase.get("label", ""))
+            # col 0: Milestone name
+            row.cells[0].paragraphs[0].add_run(ms.get("milestone", ""))
 
-            # col 1: Phase name
-            row.cells[1].paragraphs[0].add_run(phase.get("name", ""))
+            # col 1: Target Date — PENDING TO REVIEW rendered in red
+            if n_cols > 1:
+                self._set_cell_with_pending_red(
+                    row.cells[1], ms.get("target_date", _PENDING_MARKER)
+                )
 
-            # col 2: Key deliverables — each bullet on its own paragraph
-            bullets = phase.get("bullets", [])
-            cell_kd = row.cells[2]
-            for b_idx, bullet in enumerate(bullets):
-                if b_idx == 0:
-                    cell_kd.paragraphs[0].add_run(bullet)
-                else:
-                    cell_kd.add_paragraph(bullet)
+            # col 2: Completed
+            if n_cols > 2:
+                self._set_cell_with_pending_red(
+                    row.cells[2], ms.get("completed", "")
+                )
 
-            # col 3: Duration — PENDING TO REVIEW rendered in red
-            duration = phase.get("duration", _PENDING_MARKER)
-            dur_para = row.cells[3].paragraphs[0]
-            if _PENDING_MARKER in duration:
-                parts = duration.split(_PENDING_MARKER)
-                for p_idx, part in enumerate(parts):
-                    if part:
-                        dur_para.add_run(part)
-                    if p_idx < len(parts) - 1:
-                        red_run = dur_para.add_run(_PENDING_MARKER)
-                        red_run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-            else:
-                dur_para.add_run(duration)
+            # col 3: Comments
+            if n_cols > 3:
+                comments = ms.get("comments", "")
+                if comments:
+                    row.cells[3].paragraphs[0].add_run(comments)
 
-        # Detach from document body — caller inserts via addnext
-        tbl_elem = table._tbl
-        tbl_elem.getparent().remove(tbl_elem)
-        return tbl_elem
+        logger.info(
+            "doc_builder.milestone_rows_appended count=%d", len(milestones)
+        )
+        return True
+
+    @staticmethod
+    def _set_cell_with_pending_red(cell, text: str) -> None:
+        """Write *text* into *cell*, colouring ``PENDING TO REVIEW`` spans red."""
+        para = cell.paragraphs[0]
+        if _PENDING_MARKER in text:
+            parts = text.split(_PENDING_MARKER)
+            for p_idx, part in enumerate(parts):
+                if part:
+                    para.add_run(part)
+                if p_idx < len(parts) - 1:
+                    red_run = para.add_run(_PENDING_MARKER)
+                    red_run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+        elif text:
+            para.add_run(text)
 
     def _inject_structured_section(
         self,
@@ -1338,10 +1342,9 @@ class DocumentBuilder:
         Called by :meth:`_inject_labeled_content` when the LLM content is
         valid JSON for a section in :data:`_STRUCTURED_OUTPUT_SECTIONS`.
 
-        **MILESTONE PLAN** — rendered as a four-column table (Phase | Name |
-        Key Deliverables | Duration) matching the reference SoW convention.
-        Requires *doc* to be supplied so the table can be created via the
-        python-docx API before being detached and re-inserted via ``addnext``.
+        **MILESTONE PLAN** — appends rows to the existing template milestone
+        table (Milestone | Target Date | Completed | Comments).  Requires
+        *doc* so the table can be located via the python-docx table list.
 
         **HA / BACKUP / DR** — rendered as bold sub-topic labels followed by
         ``ListParagraph``-styled bullet lines.  Numbered recovery steps (lines
@@ -1354,23 +1357,17 @@ class DocumentBuilder:
         upper = section_name.upper()
 
         if upper == "MILESTONE PLAN":
-            if doc is None:
+            milestones = data.get("milestones", [])
+            if doc is not None and milestones:
+                self._append_milestone_rows(doc, milestones)
+            elif milestones:
                 # Fallback: doc not available — degrade to labelled bullet blocks
-                phases = data.get("phases", [])
-                for phase in reversed(phases):
-                    label    = phase.get("label", "")
-                    name     = phase.get("name", "")
-                    bullets  = phase.get("bullets", [])
-                    duration = phase.get("duration", _PENDING_MARKER)
-                    anchor_elem.addnext(_build_para_elem(f"– Duration: {duration}"))
-                    for bullet in reversed(bullets):
-                        prefix = "" if bullet.startswith(("–", "-", "•")) else "– "
-                        anchor_elem.addnext(_build_para_elem(prefix + bullet, list_style=True))
-                    anchor_elem.addnext(_build_para_elem(name))
-                    anchor_elem.addnext(_build_para_elem(label, bold=True))
-            else:
-                tbl_elem = self._build_milestone_table(doc, data.get("phases", []))
-                anchor_elem.addnext(tbl_elem)
+                for ms in reversed(milestones):
+                    name = ms.get("milestone", "")
+                    target = ms.get("target_date", _PENDING_MARKER)
+                    anchor_elem.addnext(
+                        _build_para_elem(f"– {name} — {target}", list_style=True)
+                    )
         else:
             labels = _STRUCTURED_SECTION_LABELS.get(upper, [])
             for field_name, display_label in reversed(labels):
@@ -1557,6 +1554,8 @@ class DocumentBuilder:
 
             # ── In Scope Application ───────────────────────────────────
             # Detected by first header = "application name".
+            # Fills the 2-column label→value table with application info
+            # drawn from inferred_metadata (not engagement scope).
             if "application name" in h0:
                 for row in table.rows:
                     label = row.cells[0].text.strip().lower() if row.cells else ""
@@ -1566,12 +1565,22 @@ class DocumentBuilder:
                     current = val_cell.text.strip()
                     if "application name" in label:
                         # Always overwrite to fix the Customer1Project1 concatenation
-                        app_name = f"{self.customer_name}: {self.project_name}"
-                        self._set_cell_text(val_cell, app_name.strip(": "))
+                        app_name = self.project_name or self.customer_name or ""
+                        self._set_cell_text(val_cell, app_name.strip())
                     elif "general description" in label and not current:
-                        scope = ctx.get("scope") or ""
-                        if scope:
-                            self._set_cell_text(val_cell, scope)
+                        # Use app_required_features (what the app does) from
+                        # inferred metadata, NOT the engagement scope.
+                        desc = (
+                            meta.get("app_required_features")
+                            or meta.get("company_description")
+                            or ""
+                        )
+                        if desc:
+                            self._set_cell_text(val_cell, desc)
+                    elif "key technologies" in label and not current:
+                        techs = meta.get("used_technologies") or ""
+                        if techs:
+                            self._set_cell_text(val_cell, techs)
                     elif "running on" in label and not current:
                         platform = ctx.get("cloud") or ""
                         val = (
