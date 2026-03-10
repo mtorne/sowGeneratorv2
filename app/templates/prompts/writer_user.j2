@@ -252,50 +252,46 @@ Write in professional, concise language. This section is internal — not custom
 {% endif %}
 
 {% if section_name == 'MILESTONE PLAN' %}
-Write a structured Milestone Plan for this OCI project with EXACTLY 4-6 phases.
-Derive the phases from the gap between current and target architecture
+Generate project milestones to be appended to the existing milestone table.
+The template already contains standard milestones — YOUR milestones will be ADDED
+as additional rows. Do NOT repeat standard milestones (kick-off, arch diagram,
+go-live) that the template already includes.
+
+Derive milestones from the gap between current and target architecture
 (use architecture_analysis in the project data JSON if present).
 
-Phase guidelines (adapt names and scope to the actual project):
-– Phase 1: Discovery & Assessment — validate current state, architecture sign-off, project governance.
-– Phase 2: OCI Landing Zone & Network — tenancy setup, VCN, subnets, IAM, connectivity.
-– Phase 3: Data & Application Migration — workload lift, DB migration, configuration.
-– Phase 4: Testing & Validation — functional, performance, security testing.
-– Phase 5: Go-Live & Cutover — production cut-over, DNS, monitoring go-live (if applicable).
-– Phase 6: Optimisation & Handover — cost tuning, runbook, knowledge transfer (if applicable).
+Milestone examples (adapt to the actual project):
+– OCI tenancy and networking provisioned
+– Database migration to Exadata/Base DB completed
+– Application tier deployed on OKE/Compute
+– Performance and security testing completed
+– DR and backup configuration validated
+– Production cutover rehearsal completed
 
-Output a JSON object matching this EXACT schema (example with two phases — use 4-6 in your output):
+Output a JSON object matching this EXACT schema (example — use 4-8 milestones):
 {
-  "phases": [
+  "milestones": [
     {
-      "label": "Phase 1",
-      "name": "Discovery & Assessment",
-      "bullets": [
-        "Validate current state architecture and establish project governance",
-        "Architecture sign-off and project kickoff",
-        "Confirm scope and delivery timeline"
-      ],
-      "duration": "2 weeks"
+      "milestone": "OCI tenancy and networking provisioned",
+      "target_date": "PENDING TO REVIEW",
+      "completed": "",
+      "comments": ""
     },
     {
-      "label": "Phase 2",
-      "name": "OCI Landing Zone & Network",
-      "bullets": [
-        "Provision OCI tenancy, IAM policies, and compartment structure",
-        "Configure VCN, subnets, and connectivity (FastConnect / VPN)"
-      ],
-      "duration": "PENDING TO REVIEW"
+      "milestone": "Database migration to Exadata completed",
+      "target_date": "PENDING TO REVIEW",
+      "completed": "",
+      "comments": "Includes Data Guard standby"
     }
   ]
 }
 
 JSON rules:
-- "label" must be exactly "Phase 1", "Phase 2", … (match the phase count).
-- "name" is a short title (≤ 6 words) for the phase.
-- "bullets" contains 2-4 concise action items or deliverables (no bullet-prefix characters).
-- "duration" is the estimated elapsed time (e.g. "2 weeks", "3-4 weeks").
-  If not derivable from the project data, use exactly: "PENDING TO REVIEW"
-- Total phases: 4 to 6.  No extra keys.
+- "milestone" is a short event/deliverable name (≤ 10 words).
+- "target_date" is DD-MM-YYYY or "PENDING TO REVIEW" if unknown.
+- "completed" is DD-MM-YYYY or empty string if not yet completed.
+- "comments" is a brief optional note — empty string if nothing to add.
+- Total milestones: 4 to 8.  No extra keys.
 {% endif %}
 
 {% if section_name == 'HIGH AVAILABILITY' %}
