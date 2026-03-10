@@ -13,7 +13,7 @@ from uuid import uuid4
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches
+from docx.shared import Inches, RGBColor
 
 logger = logging.getLogger(__name__)
 
@@ -272,15 +272,28 @@ _CUSTOMER_PREFIX_SUFFIXES = (
 )
 
 
-def _build_para_elem(text: str, bold: bool = False) -> object:
+def _build_para_elem(
+    text: str, bold: bool = False, list_style: bool = False
+) -> object:
     """Build a ``<w:p>`` XML element containing one or more runs.
 
     If *text* contains the :data:`_PENDING_MARKER` literal, the marker
     segments are emitted as separate red-coloured runs so they appear in
     red in the rendered DOCX.  All other text is emitted in the normal
     (or bold) colour.
+
+    When *list_style* is ``True`` a ``<w:pPr><w:pStyle w:val="ListParagraph"/>``
+    element is prepended so the paragraph picks up the template's List Paragraph
+    style (indentation, spacing) matching the reference document convention.
     """
     new_para = OxmlElement("w:p")
+
+    if list_style:
+        pPr = OxmlElement("w:pPr")
+        pStyle = OxmlElement("w:pStyle")
+        pStyle.set(qn("w:val"), "ListParagraph")
+        pPr.append(pStyle)
+        new_para.insert(0, pPr)
 
     def _add_run(t: str, red: bool = False) -> None:
         if not t:
@@ -1236,52 +1249,137 @@ class DocumentBuilder:
                 left_twips = 0
             anchor_elem.addnext(_build_indented_para_elem(stripped, left_twips))
 
-    @staticmethod
-    def _inject_structured_section(anchor_elem, data: dict, section_name: str) -> None:
-        """Render a parsed structured-JSON section as bold labels + bullets.
+    def _build_milestone_table(self, doc: Document, phases: list[dict]) -> object:
+        """Create a MILESTONE PLAN <w:tbl> element detached from the document body.
+
+        The table uses four columns: **Phase** | **Name** | **Key Deliverables** |
+        **Duration**.  A "Table Grid" style is requested (gracefully ignored when
+        not present in the template).  The table element is removed from the
+        temporary document body position so it can be re-inserted at the correct
+        injection point via ``addnext``.
+
+        ``PENDING TO REVIEW`` strings in the Duration column are coloured red to
+        match the convention used elsewhere in the document.
+        """
+        table = doc.add_table(rows=1, cols=4)
+        try:
+            table.style = "Table Grid"
+        except Exception:
+            pass  # style unavailable in some templates — continue without it
+
+        # ── Header row ────────────────────────────────────────────────────────
+        hdr = table.rows[0]
+        for col_idx, label in enumerate(
+            ["Phase", "Name", "Key Deliverables", "Duration"]
+        ):
+            para = hdr.cells[col_idx].paragraphs[0]
+            run = para.add_run(label)
+            run.bold = True
+
+        # ── Data rows — one per phase ─────────────────────────────────────────
+        for phase in phases:
+            row = table.add_row()
+
+            # col 0: Phase label
+            row.cells[0].paragraphs[0].add_run(phase.get("label", ""))
+
+            # col 1: Phase name
+            row.cells[1].paragraphs[0].add_run(phase.get("name", ""))
+
+            # col 2: Key deliverables — each bullet on its own paragraph
+            bullets = phase.get("bullets", [])
+            cell_kd = row.cells[2]
+            for b_idx, bullet in enumerate(bullets):
+                if b_idx == 0:
+                    cell_kd.paragraphs[0].add_run(bullet)
+                else:
+                    cell_kd.add_paragraph(bullet)
+
+            # col 3: Duration — PENDING TO REVIEW rendered in red
+            duration = phase.get("duration", _PENDING_MARKER)
+            dur_para = row.cells[3].paragraphs[0]
+            if _PENDING_MARKER in duration:
+                parts = duration.split(_PENDING_MARKER)
+                for p_idx, part in enumerate(parts):
+                    if part:
+                        dur_para.add_run(part)
+                    if p_idx < len(parts) - 1:
+                        red_run = dur_para.add_run(_PENDING_MARKER)
+                        red_run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+            else:
+                dur_para.add_run(duration)
+
+        # Detach from document body — caller inserts via addnext
+        tbl_elem = table._tbl
+        tbl_elem.getparent().remove(tbl_elem)
+        return tbl_elem
+
+    def _inject_structured_section(
+        self,
+        anchor_elem,
+        data: dict,
+        section_name: str,
+        doc: Document | None = None,
+    ) -> None:
+        """Render a parsed structured-JSON section into the document.
 
         Called by :meth:`_inject_labeled_content` when the LLM content is
         valid JSON for a section in :data:`_STRUCTURED_OUTPUT_SECTIONS`.
 
-        **MILESTONE PLAN** rendering order (per phase, inserted in reverse):
-          ``Phase N`` (bold) → phase name (plain) → bullet items → duration line.
+        **MILESTONE PLAN** — rendered as a four-column table (Phase | Name |
+        Key Deliverables | Duration) matching the reference SoW convention.
+        Requires *doc* to be supplied so the table can be created via the
+        python-docx API before being detached and re-inserted via ``addnext``.
 
-        **HA / BACKUP / DR** rendering order (per sub-topic, inserted in reverse):
-          sub-topic label (bold) → bullet items.
+        **HA / BACKUP / DR** — rendered as bold sub-topic labels followed by
+        ``ListParagraph``-styled bullet lines.  Numbered recovery steps (lines
+        whose first character is a digit) are injected without an extra ``– ``
+        prefix so they render as "1. Step …" rather than "– 1. Step …".
 
-        All items are inserted in reverse order with ``addnext`` so that
-        ``block[0]`` ends up immediately after *anchor_elem*.
+        All items are inserted in reverse order with ``addnext`` so that the
+        first logical block ends up immediately after *anchor_elem*.
         """
         upper = section_name.upper()
 
         if upper == "MILESTONE PLAN":
-            phases = data.get("phases", [])
-            for phase in reversed(phases):
-                label    = phase.get("label", "")
-                name     = phase.get("name", "")
-                bullets  = phase.get("bullets", [])
-                duration = phase.get("duration", "PENDING TO REVIEW")
-                # Duration line — always last bullet under the phase
-                anchor_elem.addnext(_build_para_elem(f"– Duration: {duration}"))
-                # Bullet items (reversed so first item ends up first)
-                for bullet in reversed(bullets):
-                    prefix = "" if bullet.startswith(("–", "-", "•")) else "– "
-                    anchor_elem.addnext(_build_para_elem(prefix + bullet))
-                # Phase name (plain body sentence) above the bullets
-                anchor_elem.addnext(_build_para_elem(name))
-                # Bold phase label at the top of this block
-                anchor_elem.addnext(_build_para_elem(label, bold=True))
+            if doc is None:
+                # Fallback: doc not available — degrade to labelled bullet blocks
+                phases = data.get("phases", [])
+                for phase in reversed(phases):
+                    label    = phase.get("label", "")
+                    name     = phase.get("name", "")
+                    bullets  = phase.get("bullets", [])
+                    duration = phase.get("duration", _PENDING_MARKER)
+                    anchor_elem.addnext(_build_para_elem(f"– Duration: {duration}"))
+                    for bullet in reversed(bullets):
+                        prefix = "" if bullet.startswith(("–", "-", "•")) else "– "
+                        anchor_elem.addnext(_build_para_elem(prefix + bullet, list_style=True))
+                    anchor_elem.addnext(_build_para_elem(name))
+                    anchor_elem.addnext(_build_para_elem(label, bold=True))
+            else:
+                tbl_elem = self._build_milestone_table(doc, data.get("phases", []))
+                anchor_elem.addnext(tbl_elem)
         else:
             labels = _STRUCTURED_SECTION_LABELS.get(upper, [])
             for field_name, display_label in reversed(labels):
                 bullets = data.get(field_name, [])
                 for bullet in reversed(bullets):
-                    prefix = "" if bullet.startswith(("–", "-", "•")) else "– "
-                    anchor_elem.addnext(_build_para_elem(prefix + bullet))
+                    # Numbered steps (e.g. "1. Restore …") keep their number
+                    # prefix and do not get an extra "– " dash prepended.
+                    is_numbered = bool(bullet) and bullet[0].isdigit()
+                    is_prefixed = bullet.startswith(("–", "-", "•"))
+                    prefix = "" if (is_prefixed or is_numbered) else "– "
+                    anchor_elem.addnext(
+                        _build_para_elem(prefix + bullet, list_style=True)
+                    )
                 anchor_elem.addnext(_build_para_elem(display_label, bold=True))
 
     def _inject_labeled_content(
-        self, anchor_elem, content: str, section_name: str
+        self,
+        anchor_elem,
+        content: str,
+        section_name: str,
+        doc: Document | None = None,
     ) -> None:
         """Route to structured JSON renderer or fall back to text renderer.
 
@@ -1291,6 +1389,11 @@ class DocumentBuilder:
         2. On success → call :meth:`_inject_structured_section`.
         3. On failure (malformed JSON or unexpected payload) → log a warning
            and fall back to :meth:`_inject_formatted_blocks_after_element`.
+
+        *doc* is forwarded to :meth:`_inject_structured_section` so the
+        MILESTONE PLAN renderer can create a proper table via the python-docx
+        API.  All other call sites may omit it safely (the table renderer
+        degrades to a labelled-bullet fallback when ``doc`` is ``None``).
 
         For all other labeled-format sections, delegates directly to the
         text renderer without attempting JSON parsing.
@@ -1307,7 +1410,7 @@ class DocumentBuilder:
                     raise ValueError(
                         f"expected JSON object, got {type(data).__name__}"
                     )
-                self._inject_structured_section(anchor_elem, data, section_name)
+                self._inject_structured_section(anchor_elem, data, section_name, doc=doc)
                 logger.debug(
                     "doc_builder.structured_injection_ok section=%s", section_name
                 )
@@ -1875,7 +1978,7 @@ class DocumentBuilder:
             _use_formatted    = section_name.upper() in _LABELED_FORMAT_SECTIONS
             _use_hierarchical = section_name.upper() in _HIERARCHICAL_BULLET_SECTIONS
             if _use_formatted:
-                self._inject_labeled_content(anchor_elem, content, section_name)
+                self._inject_labeled_content(anchor_elem, content, section_name, doc=doc)
             elif _use_hierarchical:
                 self._inject_hierarchical_bullets_after_element(anchor_elem, content)
             else:
@@ -1908,7 +2011,7 @@ class DocumentBuilder:
                 anchor_elem = para._element  # advance anchor past intro para(s)
 
         if section_name.upper() in _LABELED_FORMAT_SECTIONS:
-            self._inject_labeled_content(anchor_elem, content, section_name)
+            self._inject_labeled_content(anchor_elem, content, section_name, doc=doc)
         else:
             self._inject_blocks_after_element(anchor_elem, content)
         logger.info("doc_builder.section_injected section=%s blocks=%d", section_name, len(content_blocks))
@@ -1986,7 +2089,7 @@ class DocumentBuilder:
         _use_formatted = section_name.upper() in _LABELED_FORMAT_SECTIONS
         _use_hierarchical = section_name.upper() in _HIERARCHICAL_BULLET_SECTIONS
         if _use_formatted:
-            self._inject_labeled_content(heading_elem, content, section_name)
+            self._inject_labeled_content(heading_elem, content, section_name, doc=doc)
         elif _use_hierarchical:
             self._inject_hierarchical_bullets_after_element(heading_elem, content)
         else:
@@ -2012,7 +2115,7 @@ class DocumentBuilder:
         """
         heading = doc.add_heading(section_name.title(), level=1)
         if section_name.upper() in _LABELED_FORMAT_SECTIONS:
-            self._inject_labeled_content(heading._element, content, section_name)
+            self._inject_labeled_content(heading._element, content, section_name, doc=doc)
         else:
             for block in content.split("\n\n"):
                 if block.strip():
