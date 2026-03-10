@@ -141,8 +141,12 @@ _STRUCTURED_SECTION_LABELS: dict[str, list[tuple[str, str]]] = {
 # Sections whose LLM output uses hierarchical bullet lines (L1/L2/L3 indentation).
 # Each newline-separated line becomes its own paragraph; leading spaces determine
 # the indent level: 0 → L1 (0 twips), 2 spaces → L2 (360 twips), 4+ → L3 (720 twips).
+#
+# NOTE: CURRENT STATE ARCHITECTURE DESCRIPTION was removed — the reference SoW
+# uses a single flowing prose paragraph, not hierarchical bullets.  The prompt
+# was updated to request narrative prose; the plain paragraph renderer is used.
 _HIERARCHICAL_BULLET_SECTIONS = frozenset({
-    "CURRENT STATE ARCHITECTURE DESCRIPTION",
+    # Currently empty — kept for future sections that need indented bullet rendering.
 })
 
 # Sections where the LLM is instructed to produce a SINGLE introductory sentence.
@@ -154,6 +158,12 @@ _SINGLE_SENTENCE_SECTIONS = frozenset({
     "CURRENTLY USED TECHNOLOGY STACK",
     # IN SCOPE APPLICATION is table-driven; the LLM writes only a minimal lead-in.
     "IN SCOPE APPLICATION",
+    # FUTURE STATE ARCHITECTURE is a container heading whose sub-sections
+    # (Target Architecture Diagram, Architecture Deployment Overview, etc.)
+    # carry all the detail.  The reference SoW has zero body text between the
+    # Heading 1 and the first Heading 3, so we limit injection to at most one
+    # short introductory sentence to avoid polluting the layout.
+    "FUTURE STATE ARCHITECTURE",
 })
 
 # Known sub-topic label set for LABELED_FORMAT_SECTIONS
@@ -1216,7 +1226,9 @@ class DocumentBuilder:
                     prefix = "" if sentence.startswith(("–", "-", "•")) or (
                         len(sentence) > 1 and sentence[0].isdigit() and sentence[1] in ".)"
                     ) else "– "
-                    anchor_elem.addnext(_build_para_elem(prefix + sentence))
+                    anchor_elem.addnext(
+                        _build_para_elem(prefix + sentence, list_style=True)
+                    )
                 # Insert bold label after anchor (so it comes before the bullets)
                 anchor_elem.addnext(_build_para_elem(first_line, bold=True))
             else:

@@ -26,6 +26,15 @@ Do NOT write multiple paragraphs. Do NOT list deliverables.
 Do NOT use these words: jointly, joint, Oracle Labs, Oracle team.
 {% endif %}
 
+{% if section_name == 'FUTURE STATE ARCHITECTURE' %}
+Output EXACTLY ONE sentence (≤ 30 words) introducing the target architecture at a high level.
+This heading is a container section — sub-sections below describe the details.
+Do NOT describe components, services, or topology — those belong in the sub-sections.
+Do NOT write multiple paragraphs or bullet points.
+Example: "The target architecture leverages Oracle Cloud Infrastructure for a highly available, multi-region deployment."
+Hard limits: ≤ 1 sentence, no bullet points, no line breaks, no additional paragraphs.
+{% endif %}
+
 {% if section_name == 'SCOPE' %}
 Write exactly THREE labeled blocks — one for each scope perspective box below.
 Each block: label on its own line (no colon), then 2-4 sentences of specific scope content.
@@ -58,16 +67,43 @@ Strict rules:
 {% if section_name == 'ARCHITECTURE COMPONENTS' %}
 Group content using EXACTLY these sub-topic labels (plain-text, each on its own line):
 Networking | Security | Compute | Storage and Databases | DevOps and Management
+
+After each label, add a "Key Highlights" sub-topic summarising the most important
+architectural decisions (e.g. multi-cloud strategy, hub-and-spoke, HA pattern).
+
 {% if diagram_components %}
 IMPORTANT: The target architecture diagram was analysed automatically. Use ONLY the real
-OCI services and components listed below — do not invent anything not present here.
-Name every concrete component in prose; avoid generic filler sentences.
+services and components listed below — do not invent anything not present here.
 
 Diagram-identified components (JSON):
 {{ diagram_components | tojson(indent=2) }}
 {% else %}
-Provide 2-4 sentences per sub-topic with project-specific configuration details.
+Reference only components explicitly mentioned in the project data.
 {% endif %}
+
+WRITING STYLE — follow this pattern for each component (definition style):
+Write each component as: "**Component Name:** 1-2 sentence description of its role."
+Example:
+  Virtual Cloud Networks (VCNs): Virtual networks in OCI providing network isolation,
+  subnet segmentation, and security-list-controlled traffic between tiers.
+  Local Peering Gateways (LPGs): Inter-VCN connectivity within the same region for
+  east-west traffic between hub and spoke networks.
+
+Rules:
+- List 2-5 components per sub-topic with definition-style descriptions.
+- Write in professional prose — do NOT use dash-prefixed bullet lists.
+- Each component description must be project-specific, not generic boilerplate.
+- Do NOT say "No specific components identified" — if a sub-topic has no components
+  from the project data, write "PENDING TO REVIEW" as the description.
+{% endif %}
+
+{% if section_name == 'ARCHITECTURE DEPLOYMENT OVERVIEW' %}
+Write EXACTLY ONE short paragraph (3-5 sentences, maximum 80 words) summarising the
+deployment topology: which cloud regions are used, the networking model (e.g. hub-and-spoke),
+the key services, and the HA/DR approach.
+Be specific — name real services from the project data. Do NOT exceed one paragraph.
+Do NOT use bullet points, numbered lists, or markdown headings.
+Do NOT repeat content that belongs in Architecture Components or Implementation Details.
 {% endif %}
 
 {% if section_name == 'IMPLEMENTATION DETAILS' %}
@@ -101,22 +137,30 @@ Example: "The table below details the proposed OCI services, sizing, and quantit
 {% endif %}
 
 {% if section_name == 'STATUS AND NEXT STEPS' %}
-Write a concise status summary using EXACTLY two groups of bullet points.
+Write a concise project status summary.
+
+Start with ONE plain introductory sentence (≤ 20 words) describing overall status.
+
+Then write EXACTLY two groups of bullet points:
 
 First group header (plain text, on its own line): Completed
-List what has already been delivered or achieved. Use "– " as the bullet prefix.
-Maximum 4 bullets. Each bullet ≤ 15 words.
+List what has already been achieved. Use "– " as the bullet prefix.
+Maximum 4 bullets. Each bullet MUST be ≤ 10 words — short, punchy facts.
+Example style: "– Agreed on target architecture based on MAA Platinum"
 
-Second group header (plain text, on its own line): Pending
-List outstanding actions or open items. Use "– " as the bullet prefix.
-Maximum 4 bullets. Each bullet ≤ 15 words.
+Second group header (plain text, on its own line): Next Steps
+List concrete actions still required. Use "– " as the bullet prefix.
+Maximum 4 bullets. Each bullet MUST be ≤ 10 words.
+Example style: "– Confirm BOM and service sizing"
 
-Hard rules: no prose paragraphs, no markdown headings (#), no other sections.
-Draw facts from the project data JSON (architecture_analysis, sections already written, etc.).
+TONE: Write like a manual status update — factual, telegram-style, no full sentences.
+Do NOT over-qualify or add unnecessary context.
+Hard rules: no prose paragraphs (except the intro), no markdown headings (#).
+Draw facts from the project data JSON.
 {% endif %}
 
 {% if section_name == 'CURRENT STATE ARCHITECTURE DESCRIPTION' %}
-Write a structured, hierarchical description of the CURRENT (pre-migration) architecture using BULLET POINTS ONLY.
+Write a concise, flowing PROSE description of the CURRENT (pre-migration) architecture.
 
 CRITICAL GROUNDING RULE:
 {% if diagram_components %}
@@ -133,24 +177,25 @@ Do NOT reference architecture_analysis.target or any OCI services — this secti
 describes the existing environment before migration, not the future OCI design.
 {% endif %}
 
-Indentation rules — follow exactly (the renderer uses leading spaces to set the indent level):
-  "– text"       ← L1 bullet: no leading spaces, dash prefix
-  "  – text"     ← L2 sub-bullet: exactly 2 leading spaces then dash prefix
-  "    – text"   ← L3 sub-bullet: exactly 4 leading spaces then dash prefix
+WRITING STYLE:
+Write 2-4 paragraphs of professional narrative prose — as if a human architect is describing
+the current environment to a new team member.  Cover these areas in natural flowing text:
+  1. What platform the application runs on today (cloud provider, compute, containers)
+  2. Database tier (product, edition, HA setup)
+  3. Networking and load balancing
+  4. Current HA/DR and backup approach (if known)
 
-Structure by major service or layer (L1), with specific configuration details as sub-bullets (L2/L3).
-Maximum 6 L1 bullets. Each L1 may have 2–4 L2 sub-bullets. Use L3 only for the most critical detail.
-Focus areas: compute platform, container/VM setup, networking, databases, CI/CD, observability, HA/DR.
+Example tone (do NOT copy — adapt to actual project):
+"The current IFS Cloud architecture runs on Microsoft Azure, where Oracle Database is used as
+the RDBMS. Each customer has up to 4 environments (Dev, Test, Staging, Production). The
+application tier is containerised on Azure Kubernetes Service (AKS) with horizontal pod
+autoscaling enabled."
 
-Do NOT write prose paragraphs, headings, or numbered lists. Bullet points only.
-
-Example format (2–3 levels):
-– Azure Kubernetes Service (AKS)
-  – Multi-zone deployment across West Europe (3 availability zones)
-  – Horizontal Pod Autoscaler enabled for application tier
-– Azure SQL Managed Instance
-  – Business Critical tier with synchronous secondary replica
-  – Daily automated backups with 35-day point-in-time retention
+STRICT RULES:
+- Do NOT use bullet points, dashes, or numbered lists.
+- Do NOT use markdown headings (#, ##).
+- Write in third person, present tense, professional tone.
+- Maximum 120 words total.
 {% endif %}
 
 {% if section_name == 'MANAGED SERVICES CONFIGURATION' %}
