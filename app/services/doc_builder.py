@@ -1218,9 +1218,18 @@ class DocumentBuilder:
                 for sentence in reversed(sentences):
                     # Avoid double-prefixing lines that already carry a bullet
                     # marker (e.g. "– …" from Data Gaps or "1. …" from Next Steps).
-                    prefix = "" if sentence.startswith(("–", "-", "•")) or (
+                    # Also skip prefix for definition-style lines where the text
+                    # starts with a capitalised label followed by a colon
+                    # (e.g. "VCN: A virtual network …").
+                    already_prefixed = sentence.startswith(("–", "-", "•")) or (
                         len(sentence) > 1 and sentence[0].isdigit() and sentence[1] in ".)"
-                    ) else "– "
+                    )
+                    is_definition = (
+                        ":" in sentence
+                        and sentence.index(":") < 60
+                        and sentence[0].isupper()
+                    )
+                    prefix = "" if (already_prefixed or is_definition) else "– "
                     anchor_elem.addnext(
                         _build_para_elem(prefix + sentence, list_style=True)
                     )
@@ -1438,34 +1447,158 @@ class DocumentBuilder:
     # Table data filling
     # ------------------------------------------------------------------
 
-    # Sample acceptance criteria for an OCI cloud migration / deployment project.
-    _SAMPLE_ACCEPTANCE_CRITERIA: list[tuple[str, str]] = [
+    # ── Acceptance-criteria builder ──────────────────────────────────
+    # Derives project-specific criteria from the architecture_analysis
+    # target components.  Each entry maps a capability/metric category
+    # to keywords that trigger it (checked against the flattened target
+    # component list) plus a template description using ``{services}``.
+    #
+    # If no target components match a category it is skipped.  A generic
+    # "deployment completeness" row is always emitted as the first entry.
+    _CRITERIA_TEMPLATES: list[tuple[str, list[str], str]] = [
         (
-            "Deployment completeness",
-            "All in-scope application components are deployed and operational on OCI "
-            "(OKE workloads, MySQL Database System, Object Storage, Load Balancer).",
+            "High Availability & Resilience",
+            ["data guard", "dataguard", "dns failover", "failover", "load balancer",
+             "rac", "always on", "replication", "standby"],
+            "The system maintains uptime and recovers automatically under "
+            "simulated failure conditions using {services}.",
         ),
         (
-            "Performance baseline",
-            "Application response time remains within agreed SLA targets under "
-            "production-representative load; no degradation vs. on-premises baseline.",
+            "Performance Validation",
+            ["compute", "vm", "oke", "kubernetes", "aks", "eks", "gke",
+             "instance", "autoscal"],
+            "Application performance meets or exceeds the pre-migration "
+            "baseline under production-representative load on {services}.",
         ),
         (
-            "High availability",
-            "Failover behaviour validated: single-node failure does not cause "
-            "service outage; uptime target ≥ 99.9 % over the acceptance window.",
+            "Data Integrity & Migration",
+            ["db system", "database", "exadata", "mysql", "postgresql",
+             "autonomous", "migration", "data guard", "dataguard"],
+            "All data migrated completely and accurately; {services} "
+            "operational with zero data loss validated.",
         ),
         (
-            "Security posture",
-            "WAF policy active, Vault-managed secrets in use, network segmentation "
-            "verified, and no critical/high findings in the post-deployment security review.",
+            "Network & Connectivity",
+            ["vcn", "subnet", "internet gateway", "nat gateway",
+             "service gateway", "fastconnect", "vpn", "load balancer",
+             "peering", "dns"],
+            "Network connectivity validated end-to-end; {services} "
+            "configured and tested for the target topology.",
         ),
         (
-            "CI/CD pipeline",
-            "End-to-end automated build and deployment pipeline executes successfully "
-            "on OCI; rollback procedure documented and tested.",
+            "Storage & Backup",
+            ["file storage", "object storage", "block volume", "backup",
+             "replication", "block storage"],
+            "Storage services operational with replication and backup "
+            "validated; {services} meet retention requirements.",
+        ),
+        (
+            "Security Posture",
+            ["waf", "vault", "security", "iam", "bastion", "firewall",
+             "encryption", "ssl", "tls", "certificate"],
+            "Security controls verified: {services} configured and "
+            "no critical/high findings in post-deployment review.",
         ),
     ]
+
+    @classmethod
+    def _build_acceptance_criteria(
+        cls, architecture_analysis: dict,
+    ) -> list[tuple[str, str]]:
+        """Build project-specific acceptance criteria from architecture analysis.
+
+        Scans the target-architecture component list for keywords that match
+        each criteria category.  Matched services are interpolated into the
+        description template.  A generic "Deployment completeness" row is
+        always included first.
+
+        Returns a list of (capability, description) tuples — max 5 entries
+        to fit the template table rows.
+        """
+        # Flatten target component names — keep originals for display,
+        # lowercased copies for keyword matching.
+        target = architecture_analysis.get("target", {})
+        originals: list[str] = []   # original casing for display
+        lowered: list[str] = []     # lowercased for keyword matching
+        if isinstance(target, dict):
+            for category_items in target.values():
+                if isinstance(category_items, list):
+                    for item in category_items:
+                        s = str(item).strip()
+                        if s:
+                            originals.append(s)
+                            lowered.append(s.lower())
+                elif isinstance(category_items, str) and category_items.strip():
+                    originals.append(category_items.strip())
+                    lowered.append(category_items.strip().lower())
+
+        criteria: list[tuple[str, str]] = []
+
+        # Always lead with deployment completeness, naming actual services
+        if originals:
+            # Pick up to 4 distinctive component names for the summary
+            short_names: list[str] = []
+            seen: set[str] = set()
+            for orig in originals:
+                name = orig.split("(")[0].strip()
+                key = name.lower()
+                if key and key not in seen and len(name) > 2:
+                    seen.add(key)
+                    short_names.append(name)
+                if len(short_names) >= 4:
+                    break
+            svc_list = ", ".join(short_names) if short_names else "target OCI services"
+            criteria.append((
+                "Deployment Completeness",
+                f"All in-scope application components deployed and operational "
+                f"on OCI ({svc_list}).",
+            ))
+        else:
+            criteria.append((
+                "Deployment Completeness",
+                "All in-scope application components deployed and operational "
+                "on OCI as defined in the target architecture.",
+            ))
+
+        # Match each criteria template against the target components
+        for capability, keywords, template in cls._CRITERIA_TEMPLATES:
+            matched = [
+                originals[idx].split("(")[0].strip()
+                for kw in keywords
+                for idx, lc in enumerate(lowered)
+                if kw in lc
+            ]
+            # De-duplicate while preserving order
+            seen_m: set[str] = set()
+            unique: list[str] = []
+            for m in matched:
+                key_m = m.lower()
+                if key_m and key_m not in seen_m:
+                    seen_m.add(key_m)
+                    unique.append(m)
+            if unique:
+                services_str = ", ".join(unique[:3])
+                criteria.append((
+                    capability,
+                    template.format(services=services_str),
+                ))
+            if len(criteria) >= 5:
+                break
+
+        # Pad to at least 3 entries if we have very few components
+        if len(criteria) < 3 and not originals:
+            criteria.append((
+                "Performance Validation",
+                "Application response time remains within agreed SLA targets "
+                "under production-representative load.",
+            ))
+            criteria.append((
+                "High Availability & Resilience",
+                "Failover behaviour validated: single-node failure does not "
+                "cause service outage; uptime target ≥ 99.9 %.",
+            ))
+
+        return criteria[:5]
 
     def _fill_project_tables(
         self, doc: Document, project_context: dict | None = None
@@ -1709,9 +1842,13 @@ class DocumentBuilder:
 
             # ── Acceptance Criteria ────────────────────────────────────
             # Detected by "acceptance criteria" in col 1 of the header row.
+            # Criteria are derived from the target architecture components
+            # so they reflect the actual services being validated.
             if len(headers) > 1 and "acceptance criteria" in headers[1]:
+                arch_analysis = ctx.get("architecture_analysis") or {}
+                criteria = self._build_acceptance_criteria(arch_analysis)
                 data_rows = table.rows[1:]  # skip header row
-                for ri, (capability, description) in enumerate(self._SAMPLE_ACCEPTANCE_CRITERIA):
+                for ri, (capability, description) in enumerate(criteria):
                     if ri >= len(data_rows):
                         break
                     row = data_rows[ri]
@@ -1722,7 +1859,10 @@ class DocumentBuilder:
                             self._set_cell_text(row.cells[2], "Pending")
                         if len(row.cells) >= 4:
                             self._set_cell_text(row.cells[3], "—")
-                logger.info("doc_builder.acceptance_criteria_filled")
+                logger.info(
+                    "doc_builder.acceptance_criteria_filled count=%d",
+                    len(criteria),
+                )
                 continue
 
             # ── General DD-MM-YYYY placeholder sweep ──────────────────
