@@ -644,8 +644,11 @@ async def _run_sow_pipeline(
     # submission order so the dict rebuild is equivalent, but being explicit
     # about ordering makes the intent clear and guards against future changes.
     _results_map: dict[str, str] = dict(_write_results)
+    # Build drafted_sections from _active_sections (not structure.sections()) so
+    # that excluded sections are never looked up in _results_map — they were never
+    # written, so they have no entry there.
     drafted_sections: list[tuple[str, str]] = [
-        (s, _results_map[s]) for s in structure.sections()
+        (s, _results_map[s]) for s in _active_sections
     ]
 
     assembled = _assemble_document(drafted_sections)

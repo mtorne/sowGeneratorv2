@@ -688,6 +688,12 @@ class DocumentBuilder:
         self._normalize_template_artifacts(doc)
         self._fill_project_tables(doc, project_context=project_context)
 
+        # Physically remove excluded section headings + their template body content so
+        # they don't appear as empty stubs in the final DOCX.
+        if _excluded and self.template_path.exists():
+            for excl_name in _excluded:
+                self._delete_section_from_template(doc, excl_name)
+
         if self.template_path.exists():
             for section_name, content in sections:
                 if not content or not content.strip():
@@ -2040,6 +2046,58 @@ class DocumentBuilder:
                 fill = "D4DFDF" if ci == 0 else "E9EFEF"
                 DocumentBuilder._set_cell_fill(cell, fill)
                 DocumentBuilder._set_cell_text_color(cell, "000000")
+
+    def _delete_section_from_template(self, doc: Document, section_name: str) -> bool:
+        """Remove a section's heading and all body content up to the next same-level heading.
+
+        Used when a section is excluded from generation — ensures the template heading
+        doesn't appear in the final DOCX as an empty stub.
+        """
+        raw_keyword = SECTION_HEADING_KEYWORDS.get(section_name.upper(), section_name.lower())
+        exact_match = raw_keyword.startswith("=")
+        keyword = raw_keyword[1:] if exact_match else raw_keyword
+
+        paragraphs = list(doc.paragraphs)
+
+        # Locate the section heading
+        heading_idx: int | None = None
+        heading_level = 1
+        for i, para in enumerate(paragraphs):
+            if not self._is_heading_style(para):
+                continue
+            para_text = para.text.strip().lower()
+            matched = (para_text == keyword.lower()) if exact_match else (keyword.lower() in para_text)
+            if matched:
+                heading_idx = i
+                heading_level = self._get_heading_level(para) or 1
+                break
+
+        if heading_idx is None:
+            logger.debug("doc_builder.delete_section_not_found section=%s", section_name)
+            return False
+
+        # Find where this section ends (next heading at same or higher hierarchy level)
+        end_idx = len(paragraphs)
+        for i in range(heading_idx + 1, len(paragraphs)):
+            if self._is_heading_style(paragraphs[i]):
+                lvl = self._get_heading_level(paragraphs[i]) or 1
+                if lvl <= heading_level:
+                    end_idx = i
+                    break
+
+        # Remove all paragraphs in [heading_idx, end_idx)
+        for para in paragraphs[heading_idx:end_idx]:
+            p = para._element
+            parent = p.getparent()
+            if parent is not None:
+                parent.remove(p)
+
+        logger.info(
+            "doc_builder.section_deleted section=%s removed_paragraphs=%d",
+            section_name,
+            end_idx - heading_idx,
+        )
+        return True
 
     def _inject_section(self, doc: Document, section_name: str, content: str) -> bool:
         """Find heading in template, remove placeholder paragraphs, inject content."""
