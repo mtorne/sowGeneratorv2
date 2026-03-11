@@ -98,27 +98,50 @@ Rules:
 {% endif %}
 
 {% if section_name == 'ARCHITECTURE DEPLOYMENT OVERVIEW' %}
-Write EXACTLY ONE short paragraph (3-5 sentences, maximum 80 words) summarising the
-deployment topology: which cloud regions are used, the networking model (e.g. hub-and-spoke),
-the key services, and the HA/DR approach.
-Be specific — name real services from the project data. Do NOT exceed one paragraph.
-Do NOT use bullet points, numbered lists, or markdown headings.
-Do NOT repeat content that belongs in Architecture Components or Implementation Details.
+Write a high-level Architecture and Deployment Overview for this engagement.
+Use a formal third-person tone suitable for a customer-facing Statement of Work.
+Focus on describing the deployment approach, OCI architecture structure, networking model, and key services used.
+Treat any system or service that resides outside OCI cloud regions or tenancies as a third-party integration.
+
+{% if diagram_components %}
+Architecture components identified from diagram analysis:
+{{ diagram_components | tojson(indent=2) }}
+{% endif %}
+
+Requirements:
+- Write EXACTLY TWO paragraphs — no more, no fewer.
+- First paragraph: deployment approach, OCI cloud region(s), and networking model
+  (e.g. hub-and-spoke VCN, public/private subnet layout, connectivity strategy).
+- Second paragraph: key OCI services, their integration with each other, and a brief note
+  on scalability, high availability, or security posture where relevant.
+- Name the actual OCI services from the project data — do not use generic terms.
+- Emphasise cloud architecture structure, service integration, and deployment best practices.
+- Do NOT use bullet points, numbered lists, or markdown headings.
+- Do NOT repeat granular config details that belong in Implementation Details.
 {% endif %}
 
 {% if section_name == 'IMPLEMENTATION DETAILS' %}
-Group content into the following sub-topics, each introduced with a plain-text label on its own line:
+Describe the implementation specifics for this project from an OCI Cloud Architect perspective.
+Use a formal third-person tone. Treat any service or system outside OCI cloud regions or tenancies
+as a third-party integration.
+
+{% if diagram_components %}
+Architecture components identified from diagram analysis:
+{{ diagram_components | tojson(indent=2) }}
+{% endif %}
+
+Group the content into the following categories. Write the category name as a plain-text label
+on its own line, followed by 2–3 concise bullet points using "–" as the prefix:
+
 Networking | Security | Compute | Storage and Databases | DevOps and Management
 
-For each sub-topic, list the specific target configuration settings that will be applied:
-exact versions, CIDR ranges, instance shapes/OCPUs/memory, service options, and key parameters.
-Draw values from the project data JSON wherever possible.
-
-For any configuration value that is NOT specified or cannot be inferred from the project data,
-write the exact literal string: PENDING TO REVIEW
-(this marker will be highlighted in red in the document for easy identification).
-
-Provide 3-5 settings per sub-topic. Be concrete — avoid generic filler sentences.
+Bullet style rules:
+- Each bullet must be one short line — specific, actionable, and grounded in the actual project services.
+- Name real OCI services, deployment patterns, and approaches derived from the project data and diagram.
+- Where a specific value is unknown (e.g. CIDR range, instance shape, DB version), write
+  PENDING TO REVIEW inline rather than omitting the bullet entirely.
+- Do NOT write generic filler sentences. Do NOT add prose paragraphs between groups.
+- Do NOT use markdown headings, bold labels, or extra formatting — just plain-text category names and "–" bullets.
 {% endif %}
 
 {% if section_name == 'CURRENTLY USED TECHNOLOGY STACK' %}
@@ -160,42 +183,39 @@ Draw facts from the project data JSON.
 {% endif %}
 
 {% if section_name == 'CURRENT STATE ARCHITECTURE DESCRIPTION' %}
-Write a concise, flowing PROSE description of the CURRENT (pre-migration) architecture.
+You are an OCI Cloud Architect describing the CURRENT (pre-migration) architecture to a
+reader who may not have deep OCI knowledge. Write for clarity and accessibility.
 
-CRITICAL GROUNDING RULE:
 {% if diagram_components %}
-The current-state architecture diagram was analysed automatically.
-Describe ONLY the components listed below — do NOT include any OCI services, target-state
-components, or anything not present in the current diagram.  The context JSON also contains
-architecture_analysis.target (the future OCI design); ignore it entirely for this section.
+The current-state diagram was analysed automatically. Describe ONLY the services and
+components listed below. Do NOT include OCI target-state services or anything not present
+in this data. Ignore architecture_analysis.target entirely.
 
-Diagram-identified current components (JSON):
+Current-state components identified from diagram:
 {{ diagram_components | tojson(indent=2) }}
 {% else %}
 Draw facts exclusively from architecture_analysis.current in the project data JSON.
 Do NOT reference architecture_analysis.target or any OCI services — this section
-describes the existing environment before migration, not the future OCI design.
+describes the existing environment before migration.
 {% endif %}
 
-WRITING STYLE:
-Write 2-4 paragraphs of professional narrative prose — as if a human architect is describing
-the current environment to a new team member.  Cover these areas in natural flowing text:
-  1. What platform the application runs on today (cloud provider, compute, containers)
-  2. Database tier (product, edition, HA setup)
-  3. Networking and load balancing
-  4. Current HA/DR and backup approach (if known)
+Group services logically (e.g. Compute, Networking, Database, Connectivity) based on the
+components present. Provide a brief description of each service or tier, especially any
+cloud-provider-specific services the reader may not recognise.
 
-Example tone (do NOT copy — adapt to actual project):
-"The current IFS Cloud architecture runs on Microsoft Azure, where Oracle Database is used as
-the RDBMS. Each customer has up to 4 environments (Dev, Test, Staging, Production). The
-application tier is containerised on Azure Kubernetes Service (AKS) with horizontal pod
-autoscaling enabled."
+Write 2–3 paragraphs of professional narrative prose — as if a human architect is describing
+the current environment to a new team member. Cover:
+  1. Platform/cloud the application runs on today (provider, compute, containers)
+  2. Database tier (product, edition, HA setup if known)
+  3. Networking and load balancing approach
+  4. Any known HA/DR or backup posture
 
 STRICT RULES:
 - Do NOT use bullet points, dashes, or numbered lists.
 - Do NOT use markdown headings (#, ##).
 - Write in third person, present tense, professional tone.
-- Maximum 120 words total.
+- Do NOT draw a conclusion paragraph. Stop after the description.
+- Maximum 150 words total.
 {% endif %}
 
 {% if section_name == 'SECURITY' %}
