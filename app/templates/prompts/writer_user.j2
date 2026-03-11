@@ -140,23 +140,33 @@ Scope and implementation details:
 
 {% endif %}
 {% if diagram_components %}
-Architecture:
+Target architecture analysis:
 {% if diagram_components.get('deployment_topology') %}
+Deployment topology (read directly from the diagram — use these region names, CIDR ranges,
+Fault Domain distribution, and connectivity details in the bullets below):
 {{ diagram_components.get('deployment_topology') }}
 
 {% endif %}
+Components by category:
 {{ diagram_components | tojson(indent=2) }}
 {% endif %}
 
 Separate content by these EXACT group labels (plain-text, each on its own line):
 Networking | Security | Compute | Storage and Databases | DevOps and Management
 
-For each group write 3–5 bullets using "–" prefix and active verbs (Create, Deploy, Configure,
-Establish, Provision, Attach). Use the specific region names, CIDR ranges, service names,
-subnet placements, and Fault Domain details from the architecture and scope above.
-Write PENDING TO REVIEW only for values that are genuinely absent from both sources.
-If a group has no identifiable services, write one bullet: "– PENDING TO REVIEW"
-Do not add markdown, prose paragraphs, or extra formatting between groups.
+Bullet style rules:
+- Each bullet must be one short line — specific, actionable, and grounded in the actual project services.
+- Name real OCI services, deployment patterns, and approaches derived from the project data and diagram.
+- When deployment topology is provided above, use the exact region names, CIDR ranges, Fault Domain
+  distribution, and connectivity details — do not write PENDING TO REVIEW for information that is
+  already visible in the topology.
+- Where a specific value is unknown (e.g. CIDR range, instance shape, DB version), write
+  PENDING TO REVIEW inline rather than omitting the bullet entirely.
+- If a category has NO services or configuration details identifiable from the project data or diagram,
+  write a single bullet: "– PENDING TO REVIEW" — do NOT write explanatory prose about why it is empty.
+- Do NOT write lines like "No specific services mentioned" or "configuration management will be required".
+- Do NOT write generic filler sentences. Do NOT add prose paragraphs between groups.
+- Do NOT use markdown headings, bold labels, or extra formatting — just plain-text category names and "–" bullets.
 {% endif %}
 
 {% if section_name == 'CURRENTLY USED TECHNOLOGY STACK' %}
