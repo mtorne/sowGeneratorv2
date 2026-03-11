@@ -145,6 +145,24 @@ Only 2 lines for all details.
 
 Separate by meaningful groups, like networking, compute and storage, etc. Use bullet style.
 """,
+        "DIAGRAM_DESCRIPTION": """
+No architecture diagram was provided. Based on the project context below, write a concise
+OCI architecture overview that describes the expected deployment topology for this engagement.
+This text will appear in place of a diagram description in the Statement of Work.
+
+Customer: {customer}
+Application: {application}
+Scope: {scope}
+Implementation Details: {impdetails}
+
+Requirements:
+- Infer the likely OCI architecture components (Compute, Networking, Storage, Database) from the context
+- Group services logically by function (e.g., Networking, Compute, Database, Security)
+- Use formal, third-person tone suitable for a customer-facing SoW
+- Describe high-level components and their roles — no step-by-step procedures
+- Maximum 3 concise paragraphs or a structured bullet list with brief descriptions per group
+- Do NOT reference a diagram; write as a standalone architecture description
+""",
     }
 
     DEFAULT_PROMPT = """
