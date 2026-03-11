@@ -96,7 +96,6 @@ _INJECT_AT_TOP_SECTIONS: frozenset[str] = frozenset()
 # Sections whose LLM output uses sub-topic labels (Networking, Security, Compute …)
 # and should be formatted with bold labels + sentence-level bullet points.
 _LABELED_FORMAT_SECTIONS = frozenset({
-    "ARCHITECTURE COMPONENTS",
     "IMPLEMENTATION DETAILS",
     # Architect review uses the same label+bullet format for its sub-sections.
     "ARCHITECT REVIEW",
