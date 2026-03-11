@@ -130,10 +130,15 @@ Requirements:
 {% endif %}
 
 {% if section_name == 'IMPLEMENTATION DETAILS' %}
-Describe the implementation specifics for this project from an OCI Cloud Architect perspective.
-Use a formal third-person tone. Treat any service or system outside OCI cloud regions or tenancies
-as a third-party integration.
+Describe detailed implementation specifics for this project based on the architecture and scope below.
+Provide actionable technical guidance from an OCI Cloud Architect perspective.
+Third-person tone. Services outside OCI regions/tenancies are third-party integrations.
 
+{% if scope %}
+Scope and implementation details:
+{{ scope }}
+
+{% endif %}
 {% if diagram_components %}
 Target architecture analysis:
 {% if diagram_components.get('deployment_topology') %}

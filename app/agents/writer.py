@@ -88,6 +88,7 @@ class WriterAgent:
         user_prompt = env.get_template("writer_user.j2").render(
             section_name=section_name,
             context_json=json.dumps(context, ensure_ascii=False),
+            scope=context.get("scope", ""),
             examples=examples,
             diagram_components=diagram_components,
             json_output=json_output,
