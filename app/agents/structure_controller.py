@@ -74,9 +74,8 @@ STATIC_SECTIONS = {
     # the template H1-level intro text is preserved as-is.  Detailed description
     # is handled by the separate CURRENT STATE ARCHITECTURE DESCRIPTION section.
     "CURRENT STATE ARCHITECTURE",
-    "SECURITY",                        # standard OCI security boilerplate
-    # HIGH AVAILABILITY is now LLM-generated (diagram-aware) — removed from static.
-    "MANAGED SERVICES CONFIGURATION",  # standard OKE/managed services config
+    # SECURITY is now LLM-generated (architecture-aware) — removed from static.
+    # MANAGED SERVICES CONFIGURATION is now LLM-generated — removed from static.
     "CLOSING FEEDBACK",                # post-project human fill, no RAG value
 }
 

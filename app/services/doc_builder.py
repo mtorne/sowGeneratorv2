@@ -80,6 +80,10 @@ _FULL_CLEAR_SECTIONS = frozenset({
     "HIGH AVAILABILITY",
     "BACKUP STRATEGY",
     "DISASTER RECOVERY",
+    # SECURITY and MANAGED SERVICES CONFIGURATION are now LLM-generated from
+    # the target architecture analysis; clear template boilerplate before injection.
+    "SECURITY",
+    "MANAGED SERVICES CONFIGURATION",
 })
 
 # Sections where LLM content should be injected RIGHT AFTER the heading,
