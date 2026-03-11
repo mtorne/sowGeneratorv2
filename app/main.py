@@ -513,8 +513,15 @@ async def _run_sow_pipeline(
         # Route diagram components to the section that needs them for grounding.
         # ARCHITECTURE COMPONENTS → target diagram (what will be built on OCI).
         # CURRENT STATE ARCHITECTURE DESCRIPTION → current diagram (what exists today).
+        # SECURITY, MANAGED SERVICES CONFIGURATION → target diagram so the LLM
+        #   references actual project security services and managed services.
         # All other sections receive None (no diagram-level hard constraint).
-        if section == "ARCHITECTURE COMPONENTS":
+        _TARGET_GROUNDED_SECTIONS = {
+            "ARCHITECTURE COMPONENTS",
+            "SECURITY",
+            "MANAGED SERVICES CONFIGURATION",
+        }
+        if section in _TARGET_GROUNDED_SECTIONS:
             _section_diagram_components = _diagram_components
         elif section == "CURRENT STATE ARCHITECTURE DESCRIPTION":
             _section_diagram_components = _current_diagram_components

@@ -198,15 +198,48 @@ STRICT RULES:
 - Maximum 120 words total.
 {% endif %}
 
+{% if section_name == 'SECURITY' %}
+Write the security section describing the OCI security controls that will be implemented
+as part of this engagement. Reference the ACTUAL security-related services and components
+identified in the project data and architecture analysis.
+
+{% if diagram_components %}
+IMPORTANT — Use ONLY security-related components from the architecture diagram analysis below.
+Do NOT invent services that are not present. If a category has no security relevance, skip it.
+Diagram components (target architecture):
+{{ diagram_components | tojson }}
+{% endif %}
+
+Cover the following areas (only those relevant to the actual project):
+1. Identity & Access Management — IAM policies, compartment isolation, least-privilege
+2. Network Security — VCN security lists, NSGs, bastion hosts, private subnets
+3. Data Protection — encryption at rest and in transit, OCI Vault / key management
+4. Web Application Security — WAF policies, DDoS protection (if applicable)
+5. Monitoring & Compliance — Cloud Guard, audit logging, security zones (if applicable)
+
+Format: Write 1 introductory sentence about OCI shared-responsibility security model.
+Then add one bullet per relevant security area using "– " prefix, naming the specific
+OCI services from the architecture and their security role.
+Do NOT add markdown headings (#, ##). Maximum 5 bullets.
+Do NOT mention security services that are not in the project architecture.
+{% endif %}
+
 {% if section_name == 'MANAGED SERVICES CONFIGURATION' %}
 Write a concise description of the OCI managed services that Oracle will configure and operate
 as part of this engagement.
 
-You MUST explicitly name the specific OCI managed services from the list below that are
-relevant to this project (based on the project data JSON).  Do NOT use generic terms like
-"managed database" or "container platform" — always use the official OCI service name.
+{% if diagram_components %}
+IMPORTANT — Reference ONLY the managed services actually present in the architecture diagram.
+Do NOT invent services. If a service is not in the diagram, do NOT mention it.
+Diagram components (target architecture):
+{{ diagram_components | tojson }}
+{% endif %}
 
-Key OCI managed services to consider (only include those relevant to this project):
+You MUST explicitly name the specific OCI managed services relevant to this project.
+Do NOT use generic terms like "managed database" or "container platform" — always use the
+official OCI service name.
+
+Key OCI managed services to consider (only include those actually in the architecture):
 - Oracle Autonomous Database (ADB / ATP / ADW)
 - MySQL Database Service (MDS / MySQL HeatWave)
 - Oracle Database Cloud Service (DBCS / dbsystem / ExaCS)
