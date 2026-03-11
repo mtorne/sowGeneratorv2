@@ -104,10 +104,19 @@ class ContentGeneratorService:
         # ---------------------------------------------------------
         # 2. Generate Content for Remaining Placeholders
         # ---------------------------------------------------------
+        # Log when DIAGRAM_DESCRIPTION will use text-only fallback (no diagram uploaded)
+        if "DIAGRAM_DESCRIPTION" in placeholders and "DIAGRAM_DESCRIPTION" not in replacements:
+            logger.info(
+                "No diagram provided — DIAGRAM_DESCRIPTION will be generated via text-only "
+                "fallback prompt based on project scope and implementation details."
+            )
+
         for placeholder in placeholders:
-            if placeholder == "DIAGRAM_DESCRIPTION":
-                continue  # Already handled
-            
+            if placeholder == "DIAGRAM_DESCRIPTION" and "DIAGRAM_DESCRIPTION" in replacements:
+                continue  # Already handled by vision model — skip LLM text fallback
+            # If DIAGRAM_DESCRIPTION was NOT handled (no diagram uploaded), fall through
+            # to the LLM call below which uses the text-based fallback prompt.
+
             try:
                 logger.info(f"Generating content for {placeholder} using {provider_type}...")
                 
