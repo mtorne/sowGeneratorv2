@@ -130,50 +130,33 @@ Requirements:
 {% endif %}
 
 {% if section_name == 'IMPLEMENTATION DETAILS' %}
-Describe the implementation specifics for this project from an OCI Cloud Architect perspective.
-Use a formal third-person tone. Treat any service or system outside OCI cloud regions or tenancies
-as a third-party integration.
+Describe detailed implementation specifics for this project based on the architecture and scope below.
+Provide actionable technical guidance from an OCI Cloud Architect perspective.
+Third-person tone. Services outside OCI regions/tenancies are third-party integrations.
 
+{% if scope %}
+Scope and implementation details:
+{{ scope }}
+
+{% endif %}
 {% if diagram_components %}
-Target architecture analysis:
+Architecture:
 {% if diagram_components.get('deployment_topology') %}
-Deployment topology (read directly from the diagram — use these region names, CIDR ranges,
-Fault Domain distribution, and connectivity details in the bullets below):
 {{ diagram_components.get('deployment_topology') }}
 
 {% endif %}
-Components by category:
 {{ diagram_components | tojson(indent=2) }}
 {% endif %}
 
-Group the content into the following categories. Write the category name as a plain-text label
-on its own line, followed by 3–5 specific bullet points using "–" as the prefix:
-
+Separate content by these EXACT group labels (plain-text, each on its own line):
 Networking | Security | Compute | Storage and Databases | DevOps and Management
 
-Bullet style rules:
-- Each bullet is 1–2 sentences using active provisioning verbs: Create, Deploy, Configure,
-  Establish, Provision, Attach, Enable. Write what will be done, not a general description.
-- Name real OCI services with their specific role and placement derived from the project data and diagram.
-- Networking: cover VCN and subnet creation with CIDR ranges from the topology; all network gateways
-  present in the diagram (Internet Gateway for public ingress, NAT Gateway for private egress,
-  Service Gateway for OCI service access); inter-region connectivity mechanism (Remote Peering
-  Connection via DRG if present); and load balancer subnet placement.
-- Compute: cover VM provisioning per tier (web, app), explicit Fault Domain spread across all Fault
-  Domains visible in the diagram (name them: FD1, FD2, FD3 if visible), and load balancer backend
-  set configuration pointing to the VM private IPs.
-- Storage and Databases: cover each data-tier service separately — include file system creation with
-  mount target subnet, cross-region replication service and target region, DB System subnet placement,
-  and Data Guard configuration between primary and standby (protection mode if known).
-- When deployment topology is provided above, use the exact region names, CIDR ranges, and Fault Domain
-  details verbatim — do not write PENDING TO REVIEW for information already visible in the topology.
-- Where a specific value is genuinely unknown (e.g. instance shape, DB version, protection mode),
-  write PENDING TO REVIEW inline rather than omitting the bullet entirely.
-- If a category has NO services or configuration details identifiable from the project data or diagram,
-  write a single bullet: "– PENDING TO REVIEW" — do NOT write explanatory prose about why it is empty.
-- Do NOT write lines like "No specific services mentioned" or "configuration management will be required".
-- Do NOT write generic filler sentences. Do NOT add prose paragraphs between groups.
-- Do NOT use markdown headings, bold labels, or extra formatting — just plain-text category names and "–" bullets.
+For each group write 3–5 bullets using "–" prefix and active verbs (Create, Deploy, Configure,
+Establish, Provision, Attach). Use the specific region names, CIDR ranges, service names,
+subnet placements, and Fault Domain details from the architecture and scope above.
+Write PENDING TO REVIEW only for values that are genuinely absent from both sources.
+If a group has no identifiable services, write one bullet: "– PENDING TO REVIEW"
+Do not add markdown, prose paragraphs, or extra formatting between groups.
 {% endif %}
 
 {% if section_name == 'CURRENTLY USED TECHNOLOGY STACK' %}
