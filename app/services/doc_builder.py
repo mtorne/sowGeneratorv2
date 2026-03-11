@@ -647,6 +647,7 @@ class DocumentBuilder:
         diagram_images: dict[str, list[tuple[str, bytes]]] | dict[str, bytes] | None = None,
         project_context: dict | None = None,
         include_architect_review: bool = False,
+        excluded_sections: frozenset[str] | None = None,
     ) -> str:
         """Inject sections into template headings and save DOCX.
 
@@ -665,16 +666,21 @@ class DocumentBuilder:
                 REVIEW`` section is stripped from *sections* before injection.
                 Set to ``True`` to retain it as an internal audit trail — it
                 should never be present in a customer-facing deliverable.
+            excluded_sections: Optional set of uppercased section names to omit
+                from DOCX injection (e.g. ``{"HIGH AVAILABILITY", "DISASTER RECOVERY"}``).
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         output_name = f"output_{uuid4().hex}.docx"
         output_path = output_dir / output_name
 
+        _excluded = excluded_sections or frozenset()
         if not include_architect_review:
+            _excluded = _excluded | {"ARCHITECT REVIEW"}
+        if _excluded:
             sections = [
                 (name, content)
                 for name, content in sections
-                if name != "ARCHITECT REVIEW"
+                if name not in _excluded
             ]
 
         doc = self._load_or_create_template()
