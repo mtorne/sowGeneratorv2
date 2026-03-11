@@ -283,11 +283,35 @@ def _diagram_analysis_notes(section: str, context: dict[str, Any]) -> str:
     return " ".join(notes)
 
 
+def _build_excluded_sections(
+    include_ha: str | None,
+    include_backup: str | None,
+    include_dr: str | None,
+) -> frozenset[str]:
+    """Return the set of optional section names that the user has turned off.
+
+    Each param is a checkbox form value: ``"true"`` when checked, ``None``
+    (field absent) when unchecked.  A section is *excluded* when its checkbox
+    was NOT submitted (i.e. the value is not a truthy string).
+    """
+    _truthy = {"true", "1", "yes", "on"}
+
+    excluded: set[str] = set()
+    if (include_ha or "").lower() not in _truthy:
+        excluded.add("HIGH AVAILABILITY")
+    if (include_backup or "").lower() not in _truthy:
+        excluded.add("BACKUP STRATEGY")
+    if (include_dr or "").lower() not in _truthy:
+        excluded.add("DISASTER RECOVERY")
+    return frozenset(excluded)
+
+
 async def _run_sow_pipeline(
     context: dict[str, Any],
     current_architecture_images: list[UploadFile],
     target_architecture_images: list[UploadFile],
     project_root: Path,
+    excluded_sections: frozenset[str] = frozenset(),
 ) -> tuple[list[tuple[str, str]], str, dict[str, list[tuple[str, bytes]]]]:
     """Core SoW generation pipeline shared by all generation endpoints.
 
@@ -298,6 +322,8 @@ async def _run_sow_pipeline(
         current_architecture_images: Uploaded current-state diagram files.
         target_architecture_images: Uploaded target-state diagram files.
         project_root: Absolute path to the ``app/`` directory.
+        excluded_sections: Section names (uppercased) to skip entirely —
+            no LLM call is made and they are omitted from the output list.
 
     Returns:
         A 3-tuple of:
@@ -606,7 +632,8 @@ async def _run_sow_pipeline(
         len(structure.sections()),
         _WRITER_CONCURRENCY,
     )
-    _write_results = await asyncio.gather(*[_write_one(s) for s in structure.sections()])
+    _active_sections = [s for s in structure.sections() if s not in excluded_sections]
+    _write_results = await asyncio.gather(*[_write_one(s) for s in _active_sections])
     logger.info(
         "workflow.writer_parallel_complete elapsed=%.1fs sections=%d",
         time.monotonic() - _t0_writer,
@@ -635,6 +662,9 @@ async def generate_sow(
     current_architecture_images: list[UploadFile] = File(default=[]),
     target_architecture_images: list[UploadFile] = File(default=[]),
     include_architect_review: str | None = Form(None),
+    include_ha: str | None = Form(None),
+    include_backup: str | None = Form(None),
+    include_dr: str | None = Form(None),
 ) -> SowOutput:
     """Generate SoW DOCX and Markdown files using deterministic section orchestration."""
 
@@ -655,9 +685,11 @@ async def generate_sow(
         context: dict[str, Any] = payload_model.model_dump()
         project_root = Path(__file__).resolve().parent
         _include_review = (include_architect_review or "").lower() in ("true", "1", "yes", "on")
+        _excluded = _build_excluded_sections(include_ha, include_backup, include_dr)
 
         drafted_sections, reviewed, diagram_image_bytes = await _run_sow_pipeline(
-            context, current_architecture_images, target_architecture_images, project_root
+            context, current_architecture_images, target_architecture_images, project_root,
+            excluded_sections=_excluded,
         )
 
         logger.info("Swarm flow step: DocBuilder")
@@ -672,6 +704,7 @@ async def generate_sow(
             diagram_images=diagram_image_bytes or None,
             project_context=context,
             include_architect_review=_include_review,
+            excluded_sections=_excluded,
         )
         markdown_name = builder.build_markdown(full_document=reviewed, output_dir=project_root)
         return SowOutput(file=file_name, markdown_file=markdown_name)
@@ -692,6 +725,9 @@ async def generate_markdown(
     current_diagram: list[UploadFile] = File(default=[]),
     target_diagram: list[UploadFile] = File(default=[]),
     include_architect_review: str | None = Form(None),
+    include_ha: str | None = Form(None),
+    include_backup: str | None = Form(None),
+    include_dr: str | None = Form(None),
 ) -> PlainTextResponse:
     """Frontend-facing endpoint that accepts legacy form fields and returns markdown.
 
@@ -742,9 +778,11 @@ async def generate_markdown(
 
         project_root = Path(__file__).resolve().parent
         _include_review = (include_architect_review or "").lower() in ("true", "1", "yes", "on")
+        _excluded = _build_excluded_sections(include_ha, include_backup, include_dr)
 
         drafted_sections, reviewed, diagram_image_bytes = await _run_sow_pipeline(
-            context, current_diagram, target_diagram, project_root
+            context, current_diagram, target_diagram, project_root,
+            excluded_sections=_excluded,
         )
 
         logger.info("Swarm flow step: DocBuilder (markdown endpoint)")
@@ -759,6 +797,7 @@ async def generate_markdown(
             diagram_images=diagram_image_bytes or None,
             project_context=context,
             include_architect_review=_include_review,
+            excluded_sections=_excluded,
         )
         builder.build_markdown(full_document=reviewed, output_dir=project_root)
 

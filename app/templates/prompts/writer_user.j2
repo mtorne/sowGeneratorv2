@@ -363,137 +363,69 @@ JSON rules:
 {% endif %}
 
 {% if section_name == 'HIGH AVAILABILITY' %}
-Write a concise High Availability design for this deployment.
-Base your response on architecture_analysis.target in the project data JSON (if present).
+Write a concise High Availability section for this deployment.
+Use a formal third-person tone. Base content ONLY on the architecture and project data provided.
+Do NOT reference services or regions not present in the diagram or project data.
 
 {% if diagram_components %}
-CRITICAL GROUNDING RULE — STRICTLY ENFORCED:
-The target architecture diagram was analysed automatically.
-You MUST use ONLY the services, components, and cloud providers identified in the diagram below.
-Do NOT invent, add, or infer any service not explicitly present in this list.
-If a service you would normally mention (e.g. an OCI or Azure load balancer) is NOT in the diagram,
-do NOT reference it. Stick exclusively to what is present.
-
 {% if diagram_components.get('deployment_topology') %}
-Deployment topology (use these region names and HA distribution verbatim):
+Deployment topology:
 {{ diagram_components.get('deployment_topology') }}
 
 {% endif %}
-Diagram-identified target components (JSON):
+Architecture components:
 {{ diagram_components | tojson(indent=2) }}
-{% else %}
-Base your response on architecture_analysis.target in the project data JSON.
-Name only services and components that are explicitly mentioned in the project data.
 {% endif %}
 
-Sub-topic content guidelines:
-- oci_ha_capabilities: Name the specific HA constructs leveraged (e.g. Fault Domains, Availability
-  Domains, Active Data Guard, load balancers) — only from the diagram/project data.
-- redundancy_architecture: Describe how the target architecture achieves redundancy at each tier:
-  compute, database, storage, and network. Reference actual diagram components only.
-- failover_strategy: Explain the failover mechanism (automatic vs. manual, DNS-based, Full Stack DR).
-  Include health checks, standby configuration, or replication details as applicable.
-- rto_rpo_targets: State the Recovery Time Objective and Recovery Point Objective.
-  If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
+Write 2–3 focused paragraphs or bullet groups covering:
+– OCI HA constructs in use (Fault Domains, Load Balancers, Active Data Guard, etc.)
+– Redundancy at compute, database, storage, and network tiers
+– Failover mechanism and RTO/RPO targets (write PENDING TO REVIEW if not specified)
 
-Output a JSON object matching this EXACT schema:
-{
-  "oci_ha_capabilities": ["<bullet>", "..."],
-  "redundancy_architecture": ["<bullet>", "..."],
-  "failover_strategy": ["<bullet>", "..."],
-  "rto_rpo_targets": ["<bullet>", "..."]
-}
-
-JSON rules:
-- Each field must be a list of 2-4 concise bullet strings (no bullet-prefix characters).
-- Write project-specific content only — no generic boilerplate or invented services.
-- No extra keys.
+Use "–" prefix for bullet points. Do not use JSON, markdown headings, or bold labels.
 {% endif %}
 
 {% if section_name == 'BACKUP STRATEGY' %}
 Write a concise Backup Strategy for this deployment.
-Base your response on architecture_analysis in the project data JSON (both current and target if present).
+Use a formal third-person tone. Base content ONLY on the architecture and project data provided.
+Do NOT reference services or components not present in the diagram or project data.
 
 {% if diagram_components %}
-CRITICAL GROUNDING RULE — STRICTLY ENFORCED:
-Use ONLY the data-tier and application components identified in the diagram below.
-Do NOT reference services not present in this list.
-
-Diagram-identified target components (JSON):
+Architecture components:
 {{ diagram_components | tojson(indent=2) }}
-{% else %}
-Name only components explicitly mentioned in the project data.
 {% endif %}
 
-Sub-topic content guidelines:
-- data_backup: Identify all data-tier components requiring backup (databases, file shares, volumes)
-  that are present in the diagram/project data. Name the backup service for each. Be project-specific.
-- application_backup: Describe how application state is backed up (container images, persistent
-  volumes, secrets, config files). Reference actual diagram components only.
-- recovery_procedures: Summarise the restore procedure as numbered steps, e.g.
-  "1. Initiate restore from latest snapshot", "2. Verify DB integrity …".
-- retention_policy: State backup frequency and retention period per tier.
-  If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
+Write 2–3 focused paragraphs or bullet groups covering:
+– Data-tier backups: each database, file share, or volume present in the architecture with its backup service and frequency
+– Application-level backup: configuration, secrets, and any persistent state
+– Recovery procedure: numbered restore steps (e.g. "1. Initiate restore …", "2. Verify integrity …")
+– Retention policy per tier (write PENDING TO REVIEW if not specified)
 
-Output a JSON object matching this EXACT schema:
-{
-  "data_backup": ["<bullet>", "..."],
-  "application_backup": ["<bullet>", "..."],
-  "recovery_procedures": ["<numbered step>", "..."],
-  "retention_policy": ["<bullet>", "..."]
-}
-
-JSON rules:
-- Each field must be a list of 2-4 concise strings (no bullet-prefix characters).
-- Write project-specific content only — no invented services.
-- No extra keys.
+Use "–" prefix for bullets and "1." numbering for recovery steps. Do not use JSON, markdown headings, or bold labels.
 {% endif %}
 
 {% if section_name == 'DISASTER RECOVERY' %}
 Write a concise Disaster Recovery section for this deployment.
-Base your response on architecture_analysis and project data JSON.
+Use a formal third-person tone. Base content ONLY on the architecture and project data provided.
+Do NOT reference regions, services, or replication mechanisms not present in the diagram or project data.
 
 {% if diagram_components %}
-CRITICAL GROUNDING RULE — STRICTLY ENFORCED:
-Use ONLY the components, services, and cloud providers identified in the diagram below.
-Do NOT reference regions, replication mechanisms, or DR services not present in this list.
-
 {% if diagram_components.get('deployment_topology') %}
-Deployment topology (use these region names, primary/DR designation, and connectivity
-details verbatim in geographic_redundancy and dr_strategy):
+Deployment topology:
 {{ diagram_components.get('deployment_topology') }}
 
 {% endif %}
-Diagram-identified target components (JSON):
+Architecture components:
 {{ diagram_components | tojson(indent=2) }}
-{% else %}
-Name only services and regions explicitly mentioned in the project data.
 {% endif %}
 
-Sub-topic content guidelines:
-- dr_strategy: State the DR tier (active-passive, active-active, warm standby) and the specific
-  mechanism used (e.g. Data Guard, Full Stack DR, cross-region replication). Use only what is
-  present in the diagram/project data.
-- geographic_redundancy: Name the specific regions and availability domains involved (from the
-  diagram). Describe how workloads are distributed across the DR topology.
-- data_replication: Explain how data is replicated to the DR site using only mechanisms present
-  in the diagram (Data Guard, InnoDB Cluster, cross-region replication, etc.).
-- dr_testing_plan: State the frequency of DR drills, recovery procedure documentation location,
-  and RTO/RPO targets.
-  If not specified in the project data, each entry must be exactly: "PENDING TO REVIEW"
+Write 2–3 focused paragraphs or bullet groups covering:
+– DR strategy: tier (active-passive, warm standby, etc.) and specific mechanism (Data Guard, Full Stack DR, cross-region replication)
+– Geographic redundancy: primary and DR regions with how workloads are distributed
+– Data replication: replication service and mechanism between primary and DR site
+– DR testing plan and RTO/RPO targets (write PENDING TO REVIEW if not specified)
 
-Output a JSON object matching this EXACT schema:
-{
-  "dr_strategy": ["<bullet>", "..."],
-  "geographic_redundancy": ["<bullet>", "..."],
-  "data_replication": ["<bullet>", "..."],
-  "dr_testing_plan": ["<bullet>", "..."]
-}
-
-JSON rules:
-- Each field must be a list of 2-4 concise strings (no bullet-prefix characters).
-- Write project-specific content only — no invented services or regions.
-- No extra keys.
+Use "–" prefix for bullet points. Do not use JSON, markdown headings, or bold labels.
 {% endif %}
 
 Project data JSON:

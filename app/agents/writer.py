@@ -19,9 +19,6 @@ logger = logging.getLogger(__name__)
 # the parsed dict directly rather than parsing free-form text.
 STRUCTURED_OUTPUT_SECTIONS: frozenset[str] = frozenset({
     "MILESTONE PLAN",
-    "HIGH AVAILABILITY",
-    "BACKUP STRATEGY",
-    "DISASTER RECOVERY",
 })
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "templates" / "prompts"
