@@ -55,7 +55,8 @@ Required JSON schema:
     "component_identification_confidence": "high|medium|low",
     "overall_confidence": "high|medium|low",
     "reason": "string"
-  }
+  },
+  "deployment_topology": "string"
 }
 
 Rules:
@@ -63,6 +64,12 @@ Rules:
 - Do not invent components not present in the diagram.
 - Use empty arrays for missing categories.
 - If labels are unreadable, set low confidence and include reason.
+- deployment_topology: Write one prose paragraph capturing the deployment topology that is
+  directly readable in the diagram — include region names (e.g. "Frankfurt primary, Madrid DR"),
+  primary vs DR site designation, inter-region connectivity mechanism (e.g. "Remote Peering
+  Connection via DRG"), CIDR ranges if labels are visible, Fault Domain or Availability Domain
+  distribution, and overall data-flow direction. Include ONLY what is explicitly readable in the
+  diagram. Set to empty string if topology is not discernible.
 """.strip()
 
 
@@ -241,11 +248,17 @@ class ArchitectureVisionAgent:
             ),
         )
 
+        # deployment_topology: take from the highest-confidence extraction.
+        # Concatenating prose from multiple images risks contradictions; the
+        # best image (by overall_confidence) will have the clearest text read.
+        deployment_topology = best.get("deployment_topology", "")
+
         return {
             "diagram_summary": best.get("diagram_summary", {}),
             "components": merged_components,
             "high_availability_pattern": ha_merged,
             "confidence_assessment": best.get("confidence_assessment", {}),
+            "deployment_topology": deployment_topology,
         }
 
     @staticmethod
