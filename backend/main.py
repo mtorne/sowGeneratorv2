@@ -336,6 +336,32 @@ async def safe_process_diagram(diagram: UploadFile):
         logger.error(f"Error processing diagram: {str(e)}")
         raise
 
+
+def _pick_diagram(
+    target_diagram: Optional[UploadFile],
+    current_diagram: Optional[UploadFile],
+    diagram: Optional[UploadFile],
+) -> Optional[UploadFile]:
+    """Return the best available diagram UploadFile.
+
+    Resolution order:
+      1. target_diagram  (new frontend field — future-state architecture)
+      2. current_diagram (new frontend field — current-state architecture)
+      3. diagram         (legacy field — backward compat with old frontends)
+
+    Returns None if none of the fields carry a real file.
+    """
+    for field_name, candidate in (
+        ("target_diagram", target_diagram),
+        ("current_diagram", current_diagram),
+        ("diagram", diagram),
+    ):
+        if candidate and candidate.filename:
+            logger.info(f"Using diagram field '{field_name}' → file: {candidate.filename}")
+            return candidate
+    return None
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -523,14 +549,17 @@ async def generate_json(
     llm_provider: str = Form("openai"),  # <--- NEW FIELD, default to "openai"
     vision_provider: str = Form("meta.llama-3.2-90b-vision-instruct"), # <--- NEW FIELD
     file: UploadFile = File(None, description="Optional DOCX template file"),
-    diagram: UploadFile = File(None, description="Optional architecture diagram")
+    diagram: UploadFile = File(None, description="Optional architecture diagram (legacy)"),
+    current_diagram: UploadFile = File(None, description="Current-state architecture diagram"),
+    target_diagram: UploadFile = File(None, description="Target-state architecture diagram"),
 ):
     """Generate document content and return as JSON"""
     temp_file_path = None
-    
+    resolved_diagram = None  # set early so except-block can reference it safely
+
     try:
         logger.info(f"Starting document generation for {customer} - {application}")
-        
+
         # Use uploaded document or default template
         if file and file.filename:
             try:
@@ -542,16 +571,17 @@ async def generate_json(
         else:
             logger.info("Using default template")
             full_text = DEFAULT_TEMPLATE
-        
+
         placeholders = document_service.extract_placeholders(full_text)
         logger.info(f"Found {len(placeholders)} placeholders: {placeholders}")
-        
-        # Process diagram if provided
+
+        # Process diagram if provided (accepts target_diagram, current_diagram, or legacy diagram)
         diagram_data_uri = None
-        if diagram and diagram.filename:
+        resolved_diagram = _pick_diagram(target_diagram, current_diagram, diagram)
+        if resolved_diagram:
             try:
-                logger.info(f"Processing diagram: {diagram.filename}")
-                diagram_data_uri = await safe_process_diagram(diagram)
+                logger.info(f"Processing diagram: {resolved_diagram.filename}")
+                diagram_data_uri = await safe_process_diagram(resolved_diagram)
                 logger.info("Diagram processed successfully")
             except Exception as e:
                 logger.warning(f"Cannot process diagram: {str(e)}")
@@ -580,11 +610,11 @@ async def generate_json(
             "metadata": {
                 "placeholders_count": len(placeholders),
                 "content_length": len(final_text),
-                "has_diagram": diagram is not None,
+                "has_diagram": resolved_diagram is not None,
                 "used_default_template": file is None
             }
         })
-        
+
     except Exception as e:
         logger.error(f"Error in document generation: {str(e)}")
         return JSONResponse(
@@ -609,13 +639,16 @@ async def generate_html(
     llm_provider: str = Form("openai"),  # <--- NEW FIELD, default to "openai"
     vision_provider: str = Form("meta.llama-3.2-90b-vision-instruct"), # <--- NEW FIELD
     file: UploadFile = File(None, description="Optional DOCX template file"),
-    diagram: UploadFile = File(None, description="Optional architecture diagram")
+    diagram: UploadFile = File(None, description="Optional architecture diagram (legacy)"),
+    current_diagram: UploadFile = File(None, description="Current-state architecture diagram"),
+    target_diagram: UploadFile = File(None, description="Target-state architecture diagram"),
 ):
     """Generate document content and return as formatted HTML for easy copy-paste"""
     temp_file_path = None
     used_default_template = False
     file_validation_error = None
     diagram_error = None
+    resolved_diagram = None  # set early so except-block can reference it safely
 
     try:
         logger.info(f"Starting HTML document generation for {customer} - {application} with implementation details {impdetails}")
@@ -654,17 +687,19 @@ async def generate_html(
         logger.info(f"Found {len(placeholders)} placeholders: {placeholders}")
 
         # Process diagram if provided with error handling
+        # Accepts target_diagram, current_diagram, or legacy diagram field
         diagram_data_uri = None
-        if diagram and diagram.filename:
+        resolved_diagram = _pick_diagram(target_diagram, current_diagram, diagram)
+        if resolved_diagram:
             try:
-                logger.info(f"Processing diagram: {diagram.filename}")
-                if validate_image_file(diagram):
-                    diagram_data_uri = await safe_process_diagram(diagram)
+                logger.info(f"Processing diagram: {resolved_diagram.filename}")
+                if validate_image_file(resolved_diagram):
+                    diagram_data_uri = await safe_process_diagram(resolved_diagram)
                     logger.info("Diagram processed successfully")
                 else:
-                    diagram_error = f"Diagram '{diagram.filename}' failed validation"
+                    diagram_error = f"Diagram '{resolved_diagram.filename}' failed validation"
                     logger.warning(diagram_error)
-                    
+
             except ValueError as e:
                 diagram_error = str(e)
                 logger.warning(f"Cannot process diagram: {diagram_error}")
@@ -674,7 +709,7 @@ async def generate_html(
 
         # Generate content
         replacements = await content_generator.generate_content(
-            full_text, customer, application, scope, impdetails, diagram_data_uri, llm_provider=llm_provider, vision_provider=vision_provider  
+            full_text, customer, application, scope, impdetails, diagram_data_uri, llm_provider=llm_provider, vision_provider=vision_provider
         )
 
         # Replace placeholders in text
@@ -800,7 +835,7 @@ async def generate_html(
                 <strong>📋 Document Information:</strong><br>
                 • Template Source: {template_source_desc}<br>
                 • Placeholders Processed: {len(placeholders)}<br>
-                • Diagram Included: {'✅ Yes (' + diagram.filename + ')' if diagram_data_uri else '❌ No'}<br>
+                • Diagram Included: {'✅ Yes (' + resolved_diagram.filename + ')' if diagram_data_uri and resolved_diagram else '❌ No'}<br>
                 • Content Length: {len(final_text):,} characters
             </div>
             
@@ -894,12 +929,15 @@ async def generate_markdown(
     llm_provider: str = Form("openai"),  # <--- NEW FIELD, default to "openai"
     vision_provider: str = Form("meta.llama-3.2-90b-vision-instruct"), # <--- NEW FIELD
     file: UploadFile = File(None, description="Optional DOCX template file"),
-    diagram: UploadFile = File(None, description="Optional architecture diagram")
+    diagram: UploadFile = File(None, description="Optional architecture diagram (legacy)"),
+    current_diagram: UploadFile = File(None, description="Current-state architecture diagram"),
+    target_diagram: UploadFile = File(None, description="Target-state architecture diagram"),
 ):
     """Generate document content and return as formatted Markdown"""
     temp_file_path = None
     used_default_template = False
     file_validation_error = None
+    resolved_diagram = None  # set early so except-block can reference it safely
 
     try:
         logger.info(f"Starting Markdown document generation for {customer} - {application}")
@@ -938,18 +976,20 @@ async def generate_markdown(
         logger.info(f"Found {len(placeholders)} placeholders: {placeholders}")
 
         # Process diagram if provided with error handling
+        # Accepts target_diagram, current_diagram, or legacy diagram field
         diagram_data_uri = None
         diagram_error = None
-        if diagram and diagram.filename:
+        resolved_diagram = _pick_diagram(target_diagram, current_diagram, diagram)
+        if resolved_diagram:
             try:
-                logger.info(f"Processing diagram: {diagram.filename}")
-                if validate_image_file(diagram):
-                    diagram_data_uri = await safe_process_diagram(diagram)
+                logger.info(f"Processing diagram: {resolved_diagram.filename}")
+                if validate_image_file(resolved_diagram):
+                    diagram_data_uri = await safe_process_diagram(resolved_diagram)
                     logger.info("Diagram processed successfully")
                 else:
-                    diagram_error = f"Diagram '{diagram.filename}' failed validation"
+                    diagram_error = f"Diagram '{resolved_diagram.filename}' failed validation"
                     logger.warning(diagram_error)
-                    
+
             except ValueError as e:
                 diagram_error = str(e)
                 logger.warning(f"Cannot process diagram: {diagram_error}")
@@ -959,7 +999,7 @@ async def generate_markdown(
 
         # Generate content
         replacements = await content_generator.generate_content(
-            full_text, customer, application, scope, impdetails, diagram_data_uri, llm_provider=llm_provider, vision_provider=vision_provider 
+            full_text, customer, application, scope, impdetails, diagram_data_uri, llm_provider=llm_provider, vision_provider=vision_provider
         )
 
         # Replace placeholders in text  
@@ -1005,7 +1045,7 @@ async def generate_markdown(
             "## 🔍 Generation Details",
             "",
             f"- **Placeholders Found:** {len(placeholders)}",
-            f"- **Diagram Processed:** {'Yes (' + diagram.filename + ')' if diagram_data_uri else ('No - ' + diagram_error if diagram_error else 'No')}",
+            f"- **Diagram Processed:** {'Yes (' + resolved_diagram.filename + ')' if diagram_data_uri and resolved_diagram else ('No - ' + diagram_error if diagram_error else 'No')}",
             f"- **Content Length:** {len(final_text):,} characters",
             f"- **Used Default Template:** {'Yes' if used_default_template else 'No'}",
             "",
@@ -1038,7 +1078,7 @@ async def generate_markdown(
 
 ## File Information
 - **Template File:** {file.filename if file and file.filename else 'None'}
-- **Diagram File:** {diagram.filename if diagram and diagram.filename else 'None'}
+- **Diagram File:** {resolved_diagram.filename if resolved_diagram and resolved_diagram.filename else 'None'}
 - **Used Default Template:** {used_default_template}
 - **File Validation Error:** {file_validation_error or 'None'}
 
