@@ -104,7 +104,14 @@ Focus on describing the deployment approach, OCI architecture structure, network
 Treat any system or service that resides outside OCI cloud regions or tenancies as a third-party integration.
 
 {% if diagram_components %}
-Architecture components identified from diagram analysis:
+Target architecture analysis:
+{% if diagram_components.get('deployment_topology') %}
+Deployment topology (read directly from the diagram — use these region names, CIDR ranges,
+and connectivity details verbatim in the first paragraph):
+{{ diagram_components.get('deployment_topology') }}
+
+{% endif %}
+Components by category:
 {{ diagram_components | tojson(indent=2) }}
 {% endif %}
 
@@ -116,6 +123,8 @@ Requirements:
   on scalability, high availability, or security posture where relevant.
 - Name the actual OCI services from the project data — do not use generic terms.
 - Emphasise cloud architecture structure, service integration, and deployment best practices.
+- When deployment topology is provided above, use the exact region names, CIDR ranges, and
+  connectivity details — do not replace them with generic placeholders or PENDING TO REVIEW.
 - Do NOT use bullet points, numbered lists, or markdown headings.
 - Do NOT repeat granular config details that belong in Implementation Details.
 {% endif %}
@@ -126,7 +135,14 @@ Use a formal third-person tone. Treat any service or system outside OCI cloud re
 as a third-party integration.
 
 {% if diagram_components %}
-Architecture components identified from diagram analysis:
+Target architecture analysis:
+{% if diagram_components.get('deployment_topology') %}
+Deployment topology (read directly from the diagram — use these region names, CIDR ranges,
+Fault Domain distribution, and connectivity details in the bullets below):
+{{ diagram_components.get('deployment_topology') }}
+
+{% endif %}
+Components by category:
 {{ diagram_components | tojson(indent=2) }}
 {% endif %}
 
@@ -138,6 +154,9 @@ Networking | Security | Compute | Storage and Databases | DevOps and Management
 Bullet style rules:
 - Each bullet must be one short line — specific, actionable, and grounded in the actual project services.
 - Name real OCI services, deployment patterns, and approaches derived from the project data and diagram.
+- When deployment topology is provided above, use the exact region names, CIDR ranges, Fault Domain
+  distribution, and connectivity details — do not write PENDING TO REVIEW for information that is
+  already visible in the topology.
 - Where a specific value is unknown (e.g. CIDR range, instance shape, DB version), write
   PENDING TO REVIEW inline rather than omitting the bullet entirely.
 - If a category has NO services or configuration details identifiable from the project data or diagram,
@@ -362,6 +381,11 @@ Do NOT invent, add, or infer any service not explicitly present in this list.
 If a service you would normally mention (e.g. an OCI or Azure load balancer) is NOT in the diagram,
 do NOT reference it. Stick exclusively to what is present.
 
+{% if diagram_components.get('deployment_topology') %}
+Deployment topology (use these region names and HA distribution verbatim):
+{{ diagram_components.get('deployment_topology') }}
+
+{% endif %}
 Diagram-identified target components (JSON):
 {{ diagram_components | tojson(indent=2) }}
 {% else %}
@@ -441,6 +465,12 @@ CRITICAL GROUNDING RULE — STRICTLY ENFORCED:
 Use ONLY the components, services, and cloud providers identified in the diagram below.
 Do NOT reference regions, replication mechanisms, or DR services not present in this list.
 
+{% if diagram_components.get('deployment_topology') %}
+Deployment topology (use these region names, primary/DR designation, and connectivity
+details verbatim in geographic_redundancy and dr_strategy):
+{{ diagram_components.get('deployment_topology') }}
+
+{% endif %}
 Diagram-identified target components (JSON):
 {{ diagram_components | tojson(indent=2) }}
 {% else %}

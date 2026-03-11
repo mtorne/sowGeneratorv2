@@ -480,6 +480,19 @@ async def _run_sow_pipeline(
     )
     _diagram_components: dict | None = _target_arch.get("components") or None
 
+    # Enrich diagram_components with deployment_topology prose extracted by the
+    # vision agent.  The topology string captures region names, CIDR ranges,
+    # Fault Domain distribution, and inter-region connectivity that flat
+    # component lists cannot express — bridging the gap with the backend
+    # generator which passes a full prose description to each section writer.
+    _target_topology: str = _target_arch.get("deployment_topology") or ""
+    if _target_topology:
+        if _diagram_components:
+            _diagram_components = dict(_diagram_components)
+            _diagram_components["deployment_topology"] = _target_topology
+        else:
+            _diagram_components = {"deployment_topology": _target_topology}
+
     # Current-state diagram components — used to hard-ground CURRENT STATE
     # ARCHITECTURE DESCRIPTION so the LLM cannot drift into target/OCI services.
     _current_arch = (
@@ -488,6 +501,15 @@ async def _run_sow_pipeline(
         .get("architecture_extraction", {})
     )
     _current_diagram_components: dict | None = _current_arch.get("components") or None
+
+    # Similarly enrich current-state components with topology prose.
+    _current_topology: str = _current_arch.get("deployment_topology") or ""
+    if _current_topology:
+        if _current_diagram_components:
+            _current_diagram_components = dict(_current_diagram_components)
+            _current_diagram_components["deployment_topology"] = _current_topology
+        else:
+            _current_diagram_components = {"deployment_topology": _current_topology}
 
     # Phase 2: Fan-out section writing for all sections in parallel.
     # Each LLM call is a blocking OCI HTTP request; asyncio.to_thread wraps it
