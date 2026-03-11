@@ -515,11 +515,15 @@ async def _run_sow_pipeline(
         # CURRENT STATE ARCHITECTURE DESCRIPTION → current diagram (what exists today).
         # SECURITY, MANAGED SERVICES CONFIGURATION → target diagram so the LLM
         #   references actual project security services and managed services.
+        # ARCHITECTURE DEPLOYMENT OVERVIEW, IMPLEMENTATION DETAILS → target diagram
+        #   so the LLM can name real services and deployment patterns.
         # All other sections receive None (no diagram-level hard constraint).
         _TARGET_GROUNDED_SECTIONS = {
             "ARCHITECTURE COMPONENTS",
             "SECURITY",
             "MANAGED SERVICES CONFIGURATION",
+            "ARCHITECTURE DEPLOYMENT OVERVIEW",
+            "IMPLEMENTATION DETAILS",
         }
         if section in _TARGET_GROUNDED_SECTIONS:
             _section_diagram_components = _diagram_components

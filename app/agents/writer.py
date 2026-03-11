@@ -103,6 +103,13 @@ class WriterAgent:
 
         raw = call_llm(system_prompt=system_prompt, user_prompt=user_prompt).strip()
 
+        logger.info(
+            "writer.llm_output section=%s len=%d preview=%r",
+            section_name,
+            len(raw),
+            raw[:300],
+        )
+
         if json_output:
             # Strip optional markdown code-fence wrappers that some models add.
             # e.g.  ```json\n{...}\n```  →  {...}
