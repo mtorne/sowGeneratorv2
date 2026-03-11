@@ -65,11 +65,9 @@ Strict rules:
 {% endif %}
 
 {% if section_name == 'ARCHITECTURE COMPONENTS' %}
-Group content using EXACTLY these sub-topic labels (plain-text, each on its own line):
-Networking | Security | Compute | Storage and Databases | DevOps and Management
-
-After each label, add a "Key Highlights" sub-topic summarising the most important
-architectural decisions (e.g. multi-cloud strategy, hub-and-spoke, HA pattern).
+Write a flat listing of every OCI component and service used in this architecture.
+Do NOT group by category. Do NOT use sub-topic labels such as Networking, Security, etc.
+Do NOT add a "Key Highlights" section.
 
 {% if diagram_components %}
 IMPORTANT: The target architecture diagram was analysed automatically. Use ONLY the real
@@ -81,20 +79,26 @@ Diagram-identified components (JSON):
 Reference only components explicitly mentioned in the project data.
 {% endif %}
 
-WRITING STYLE — follow this pattern for each component (definition style):
-Write each component as: "**Component Name:** 1-2 sentence description of its role."
-Example:
-  Virtual Cloud Networks (VCNs): Virtual networks in OCI providing network isolation,
-  subnet segmentation, and security-list-controlled traffic between tiers.
-  Local Peering Gateways (LPGs): Inter-VCN connectivity within the same region for
-  east-west traffic between hub and spoke networks.
+WRITING STYLE — produce one paragraph per component:
+- Line 1: the component or service name on its own line (plain text, no bold markers).
+- Lines 2+: a 2-5 sentence description paragraph explaining the service's role and how
+  it fits the project architecture. Write from an OCI Cloud Architect point of view.
+
+Example (do NOT copy verbatim — adapt to the actual project):
+
+Tenancy
+An OCI tenancy is the root-level construct that contains all cloud resources provisioned for this engagement. It provides the administrative boundary for IAM policies, compartment isolation, and billing segregation.
+
+Virtual Cloud Networks (VCNs)
+Virtual Cloud Networks provide the foundational network layer in the OCI region. Each VCN is configured with public and private subnets, route tables, and security lists to segment application tiers. A hub-and-spoke topology is used to centralise network inspection and shared services.
 
 Rules:
-- List 2-5 components per sub-topic with definition-style descriptions.
-- Write in professional prose — do NOT use dash-prefixed bullet lists.
+- List every component present in the architecture — aim for 8-20 components.
+- Each component gets its own name line followed by a descriptive paragraph.
+- Separate components with a blank line between the description and the next name.
+- Write in professional prose — do NOT use dash-prefixed bullet lists or bold markers.
 - Each component description must be project-specific, not generic boilerplate.
-- Do NOT say "No specific components identified" — if a sub-topic has no components
-  from the project data, write "PENDING TO REVIEW" as the description.
+- Focus on technical accuracy and OCI best practices.
 {% endif %}
 
 {% if section_name == 'ARCHITECTURE DEPLOYMENT OVERVIEW' %}
