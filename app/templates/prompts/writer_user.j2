@@ -151,9 +151,23 @@ Architecture:
 Separate content by these EXACT group labels (plain-text, each on its own line):
 Networking | Security | Compute | Storage and Databases | DevOps and Management
 
-For each group write 3–5 bullets using "–" prefix and active verbs (Create, Deploy, Configure,
-Establish, Provision, Attach). Use the specific region names, CIDR ranges, service names,
-subnet placements, and Fault Domain details from the architecture and scope above.
+For each group write 3–7 bullets using "–" prefix and active verbs (Create, Deploy, Configure,
+Establish, Provision, Attach).
+
+CRITICAL — every bullet MUST include concrete configuration details when available:
+- Service version or edition (e.g. "Oracle Database 19c Enterprise Edition", "OKE v1.28",
+  "MySQL HeatWave 8.0", "Oracle Linux 8")
+- Instance shapes and sizing (e.g. "VM.Standard.E4.Flex with 8 OCPUs / 128 GB RAM",
+  "BM.Standard3.64", "Exadata X9M quarter rack")
+- Network configuration (CIDR ranges, subnet placements, port numbers, protocol details)
+- Storage specifications (Block Volume size in GB/TB, performance tier, backup policies)
+- Database configuration (PDB/CDB layout, Data Guard mode, character set, backup schedule)
+- Cluster details (node pool count, worker node shape, Kubernetes version, pod CIDR)
+- Security settings (TLS version, encryption algorithms, IAM policy scope, NSG rules)
+- Replication and HA settings (sync/async, standby type, failover mode)
+
+Use the specific region names, CIDR ranges, service names, subnet placements, and Fault Domain
+details from the architecture and scope above.
 Write PENDING TO REVIEW only for values that are genuinely absent from both sources.
 If a group has no identifiable services, write one bullet: "– PENDING TO REVIEW"
 Do not add markdown, prose paragraphs, or extra formatting between groups.
