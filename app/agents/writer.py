@@ -48,6 +48,142 @@ def _jinja_env():  # type: ignore[return]
 class WriterAgent:
     """Generates section-level SoW content."""
 
+    # Sections that describe the CURRENT (pre-migration) environment.
+    _CURRENT_STATE_SECTIONS: frozenset[str] = frozenset({
+        "CURRENT STATE ARCHITECTURE DESCRIPTION",
+    })
+
+    # Sections that describe the TARGET OCI architecture.
+    _TARGET_SECTIONS: frozenset[str] = frozenset({
+        "FUTURE STATE ARCHITECTURE",
+        "ARCHITECTURE DEPLOYMENT OVERVIEW",
+        "IMPLEMENTATION DETAILS",
+        "ARCHITECTURE COMPONENTS",
+    })
+
+    def _build_evidence_lines(
+        self,
+        section_name: str,
+        diagram_components: dict | None,
+        context: dict,
+    ) -> list[str]:
+        """Extract mandatory architecture facts from diagram_components for the prompt."""
+        if not diagram_components:
+            return []
+
+        lines: list[str] = []
+        sname = section_name.upper()
+
+        def _join(val: object) -> str:
+            if isinstance(val, list):
+                return ", ".join(str(i) for i in val if str(i).strip())
+            return str(val).strip()
+
+        if sname in self._CURRENT_STATE_SECTIONS:
+            for key in ("compute", "databases", "networking"):
+                val = diagram_components.get(key)
+                if val:
+                    joined = _join(val)
+                    if joined:
+                        lines.append(f"Current {key}: {joined}")
+        elif sname in self._TARGET_SECTIONS:
+            for key in ("compute", "databases", "networking", "load_balancers", "security"):
+                val = diagram_components.get(key)
+                if val:
+                    joined = _join(val)
+                    if joined:
+                        label = key.replace("_", " ").title()
+                        lines.append(f"Target {label}: {joined}")
+        elif sname == "CURRENTLY USED TECHNOLOGY STACK":
+            arch = context.get("architecture_analysis", {})
+            if isinstance(arch, dict):
+                current = arch.get("current", {})
+                if isinstance(current, dict):
+                    for key in ("compute", "databases", "networking"):
+                        val = current.get(key)
+                        if val:
+                            joined = _join(val)
+                            if joined:
+                                lines.append(f"Current {key}: {joined}")
+
+        return lines
+
+    def _build_guardrails(
+        self,
+        section_name: str,  # noqa: ARG002 — reserved for future per-section filtering
+        diagram_components: dict | None,
+    ) -> list[str]:
+        """Scan diagram_components for known patterns and return conditional guardrail sentences."""
+        if not diagram_components:
+            return []
+
+        guardrails: list[str] = []
+
+        def _flatten(val: object) -> list[str]:
+            if isinstance(val, list):
+                return [str(i) for i in val]
+            if isinstance(val, dict):
+                result: list[str] = []
+                for v in val.values():
+                    result.extend(_flatten(v))
+                return result
+            if val:
+                return [str(val)]
+            return []
+
+        all_text = " ".join(
+            item for v in diagram_components.values() for item in _flatten(v)
+        ).lower()
+
+        def _section_text(key: str) -> str:
+            return " ".join(_flatten(diagram_components.get(key, []))).lower()
+
+        security_text = _section_text("security")
+        databases_text = _section_text("databases")
+        ha_text = _section_text("ha_dr") or _section_text("ha")
+        lb_text = _section_text("load_balancers")
+        topology_text = str(diagram_components.get("deployment_topology", "")).lower()
+        on_prem_val = diagram_components.get("on_prem_connectivity") or diagram_components.get("connectivity")
+        on_prem_present = bool(on_prem_val) or any(kw in all_text for kw in ("drg", "vpn", "fastconnect"))
+
+        if "oke" in all_text or "kubernetes" in all_text:
+            guardrails.append(
+                "OKE is present — describe OKE cluster, node pools, and Kubernetes version."
+            )
+
+        if "waf" in security_text or "waf" in all_text:
+            guardrails.append("WAF is present — describe WAF protection on ingress.")
+
+        if on_prem_present:
+            guardrails.append(
+                "On-premises connectivity detected — describe DRG/VPN/FastConnect."
+            )
+
+        dataguard_present = any(
+            kw in t for kw in ("data guard", "dataguard")
+            for t in (databases_text, ha_text, all_text)
+        )
+        if dataguard_present:
+            guardrails.append(
+                "Data Guard detected — describe replication mode and standby configuration."
+            )
+
+        if lb_text.strip() or "load balancer" in all_text:
+            guardrails.append(
+                "Load Balancer detected — describe ingress routing and health checks."
+            )
+
+        if (
+            "multi_region" in diagram_components
+            or "multi-region" in topology_text
+            or "multi region" in topology_text
+        ):
+            guardrails.append(
+                "Multi-region deployment — describe primary/DR region roles."
+            )
+
+        return guardrails
+
     def write_section(
         self,
         section_name: str,
@@ -82,6 +218,9 @@ class WriterAgent:
             json_output=json_output,
         ).strip()
 
+        evidence_lines = self._build_evidence_lines(section_name, diagram_components, context)
+        guardrails = self._build_guardrails(section_name, diagram_components)
+
         user_prompt = env.get_template("writer_user.j2").render(
             section_name=section_name,
             context_json=json.dumps(context, ensure_ascii=False),
@@ -89,6 +228,8 @@ class WriterAgent:
             examples=examples,
             diagram_components=diagram_components,
             json_output=json_output,
+            evidence_lines=evidence_lines,
+            guardrails=guardrails,
         ).strip()
 
         logger.debug(

@@ -10,12 +10,10 @@ OUTPUT FORMAT — STRICTLY FOLLOW:
 - Do NOT add comments inside the JSON.
 - Ensure every string value is properly JSON-escaped (no unescaped newlines or quotes).
 {% else %}
-OUTPUT FORMATTING RULES — STRICTLY FOLLOW ALL OF THESE:
-- Do NOT output the section name or any heading at the start. The heading is already in the document template.
-- Do NOT use markdown headers: no lines starting with #, ##, ###, or ####.
-- Do NOT use markdown bold (**text**) for sub-section labels or headings.
-- Do NOT use markdown horizontal rules (---).
-- Separate logical paragraphs with a blank line.
-- You MAY use bullet lists with hyphens (-) or asterisks (*) for list content where appropriate.
-- Do NOT include file metadata, diagram analysis evidence, confidence scores, or technical debug information in your output. Write prose only.
+Write in professional enterprise tone with deterministic structure.
+Reuse phrasing patterns from reference examples where appropriate.
+Return clean prose for this section only.
+Do not include markdown headers (#, ##), horizontal rules (---), or debug metadata.
+Do not output the section name or any heading at the start — the heading is already in the document template.
+Separate logical blocks with a blank line.
 {% endif %}
