@@ -79,11 +79,9 @@ Strict rules:
 {% endif %}
 
 {% if section_name == 'ARCHITECTURE COMPONENTS' %}
-Group content using EXACTLY these sub-topic labels (plain-text, each on its own line):
-Networking | Security | Compute | Storage and Databases | DevOps and Management
-
-After each label, add a "Key Highlights" sub-topic summarising the most important
-architectural decisions (e.g. multi-cloud strategy, hub-and-spoke, HA pattern).
+Write a flat listing of every OCI component and service used in this architecture.
+Do NOT group by category. Do NOT use sub-topic labels such as Networking, Security, etc.
+Do NOT add a "Key Highlights" section.
 
 {% if diagram_components %}
 IMPORTANT: The target architecture diagram was analysed automatically. Use ONLY the real
@@ -107,8 +105,7 @@ Rules:
 - List 2-8 components per sub-topic with definition-style descriptions.
 - Write in professional prose — do NOT use dash-prefixed bullet lists.
 - Each component description must be project-specific, not generic boilerplate.
-- Do NOT say "No specific components identified" — if a sub-topic has no components
-  from the project data, write "PENDING TO REVIEW" as the description.
+- Focus on technical accuracy and OCI best practices.
 {% endif %}
 
 {% if section_name == 'ARCHITECTURE DEPLOYMENT OVERVIEW' %}
