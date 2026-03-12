@@ -15,6 +15,32 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, RGBColor
 
+from app.services.doc_style_constants import (
+    BODY_COLOR,
+    BOM_HEADER_FILL,
+    CELL_MARGIN_BOTTOM,
+    CELL_MARGIN_LEFT,
+    CELL_MARGIN_RIGHT,
+    CELL_MARGIN_TOP,
+    CUSTOMER_COLOR,
+    INNER_BORDER_COLOR,
+    INNER_BORDER_SIZE,
+    ORACLE_COLOR,
+    OUTER_BORDER_COLOR,
+    OUTER_BORDER_SIZE,
+    PENDING_COLOR,
+    STYLE_HEADING3,
+    STYLE_LIST_BULLET,
+    STYLE_LIST_BULLET2,
+    STYLE_LIST_BULLET3,
+    STYLE_LIST_NUMBERED,
+    TABLE_ALT_FILL_DARK,
+    TABLE_ALT_FILL_LIGHT,
+    TABLE_HEADER_FILL,
+    TABLE_HEADER_TEXT,
+    TABLE_STYLE_BOM,
+)
+
 logger = logging.getLogger(__name__)
 
 # Maps canonical section names → keyword to match in template heading text
@@ -293,6 +319,9 @@ def _build_para_elem(
     When *list_style* is ``True`` a ``<w:pPr><w:pStyle w:val="ListParagraph"/>``
     element is prepended so the paragraph picks up the template's List Paragraph
     style (indentation, spacing) matching the reference document convention.
+
+    For proper Word list styling (with real bullets from template numbering),
+    use :func:`_build_word_style_para_elem` instead.
     """
     new_para = OxmlElement("w:p")
 
@@ -313,7 +342,7 @@ def _build_para_elem(
                 rPr.append(OxmlElement("w:b"))
             if red:
                 c = OxmlElement("w:color")
-                c.set(qn("w:val"), "FF0000")
+                c.set(qn("w:val"), PENDING_COLOR)
                 rPr.append(c)
             r.append(rPr)
         t_elem = OxmlElement("w:t")
@@ -332,6 +361,69 @@ def _build_para_elem(
         _add_run(text, red=False)
 
     return new_para
+
+
+def _build_word_style_para_elem(text: str, style_id: str) -> object:
+    """Build a ``<w:p>`` that uses a named Word paragraph style from the template.
+
+    Unlike :func:`_build_para_elem` (which sets ListParagraph with a text-dash
+    prefix), this function sets the paragraph style to a proper Word list style
+    (e.g. ``NormalBodyBullet1``, ``NormalBodyBullet2``, ``NumberedList1``,
+    ``Heading3``) so that the bullet character, indentation, and spacing all
+    derive from the template's own style definitions extracted from the
+    reference document.
+
+    ``PENDING TO REVIEW`` markers are rendered in red, same as _build_para_elem.
+
+    Strip any leading ``– `` or ``- `` dash prefix from *text* before calling
+    this function — the Word list style supplies the bullet character.
+    """
+    new_para = OxmlElement("w:p")
+
+    pPr = OxmlElement("w:pPr")
+    pStyle = OxmlElement("w:pStyle")
+    pStyle.set(qn("w:val"), style_id)
+    pPr.append(pStyle)
+    new_para.insert(0, pPr)
+
+    def _add_run(t: str, red: bool = False) -> None:
+        if not t:
+            return
+        r = OxmlElement("w:r")
+        if red:
+            rPr = OxmlElement("w:rPr")
+            c = OxmlElement("w:color")
+            c.set(qn("w:val"), PENDING_COLOR)
+            rPr.append(c)
+            r.append(rPr)
+        t_elem = OxmlElement("w:t")
+        t_elem.text = t
+        t_elem.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        r.append(t_elem)
+        new_para.append(r)
+
+    if _PENDING_MARKER in text:
+        parts = text.split(_PENDING_MARKER)
+        for idx, part in enumerate(parts):
+            _add_run(part, red=False)
+            if idx < len(parts) - 1:
+                _add_run(_PENDING_MARKER, red=True)
+    else:
+        _add_run(text, red=False)
+
+    return new_para
+
+
+def _strip_bullet_prefix(text: str) -> str:
+    """Remove a leading ``– ``, ``- ``, or ``• `` bullet prefix from *text*.
+
+    Word list styles supply their own bullet character; text content must not
+    carry a duplicate manual prefix.
+    """
+    for prefix in ("– ", "- ", "• ", "* "):
+        if text.startswith(prefix):
+            return text[len(prefix):]
+    return text
 
 
 def _build_indented_para_elem(text: str, left_twips: int = 0) -> object:
@@ -1231,25 +1323,24 @@ class DocumentBuilder:
                 # Each line is built with _build_para_elem so PENDING TO REVIEW
                 # markers are rendered in red.
                 for sentence in reversed(sentences):
-                    # Avoid double-prefixing lines that already carry a bullet
-                    # marker (e.g. "– …" from Data Gaps or "1. …" from Next Steps).
-                    # Also skip prefix for definition-style lines where the text
-                    # starts with a capitalised label followed by a colon
-                    # (e.g. "VCN: A virtual network …").
-                    already_prefixed = sentence.startswith(("–", "-", "•")) or (
-                        len(sentence) > 1 and sentence[0].isdigit() and sentence[1] in ".)"
+                    is_numbered = (
+                        bool(sentence)
+                        and sentence[0].isdigit()
+                        and len(sentence) > 1
+                        and sentence[1] in ".)"
                     )
-                    is_definition = (
-                        ":" in sentence
-                        and sentence.index(":") < 60
-                        and sentence[0].isupper()
-                    )
-                    prefix = "" if (already_prefixed or is_definition) else "– "
-                    anchor_elem.addnext(
-                        _build_para_elem(prefix + sentence, list_style=True)
-                    )
-                # Insert bold label after anchor (so it comes before the bullets)
-                anchor_elem.addnext(_build_para_elem(first_line, bold=True))
+                    if is_numbered:
+                        anchor_elem.addnext(
+                            _build_word_style_para_elem(sentence, STYLE_LIST_NUMBERED)
+                        )
+                    else:
+                        anchor_elem.addnext(
+                            _build_word_style_para_elem(
+                                _strip_bullet_prefix(sentence), STYLE_LIST_BULLET
+                            )
+                        )
+                # Insert Heading3 label before the bullets
+                anchor_elem.addnext(_build_word_style_para_elem(first_line, STYLE_HEADING3))
             else:
                 anchor_elem.addnext(_build_para_elem(block))
 
@@ -1273,12 +1364,14 @@ class DocumentBuilder:
             stripped = line.lstrip()
             indent = len(line) - len(stripped)
             if indent >= 4:
-                left_twips = 720
+                style_id = STYLE_LIST_BULLET3
             elif indent >= 2:
-                left_twips = 360
+                style_id = STYLE_LIST_BULLET2
             else:
-                left_twips = 0
-            anchor_elem.addnext(_build_indented_para_elem(stripped, left_twips))
+                style_id = STYLE_LIST_BULLET
+            anchor_elem.addnext(
+                _build_word_style_para_elem(_strip_bullet_prefix(stripped), style_id)
+            )
 
     def _append_milestone_rows(
         self, doc: Document, milestones: list[dict]
@@ -1390,22 +1483,30 @@ class DocumentBuilder:
                     name = ms.get("milestone", "")
                     target = ms.get("target_date", _PENDING_MARKER)
                     anchor_elem.addnext(
-                        _build_para_elem(f"– {name} — {target}", list_style=True)
+                        _build_word_style_para_elem(f"{name} — {target}", STYLE_LIST_BULLET)
                     )
         else:
             labels = _STRUCTURED_SECTION_LABELS.get(upper, [])
             for field_name, display_label in reversed(labels):
                 bullets = data.get(field_name, [])
                 for bullet in reversed(bullets):
-                    # Numbered steps (e.g. "1. Restore …") keep their number
-                    # prefix and do not get an extra "– " dash prepended.
-                    is_numbered = bool(bullet) and bullet[0].isdigit()
-                    is_prefixed = bullet.startswith(("–", "-", "•"))
-                    prefix = "" if (is_prefixed or is_numbered) else "– "
-                    anchor_elem.addnext(
-                        _build_para_elem(prefix + bullet, list_style=True)
+                    is_numbered = (
+                        bool(bullet)
+                        and bullet[0].isdigit()
+                        and len(bullet) > 1
+                        and bullet[1] in ".)"
                     )
-                anchor_elem.addnext(_build_para_elem(display_label, bold=True))
+                    if is_numbered:
+                        anchor_elem.addnext(
+                            _build_word_style_para_elem(bullet, STYLE_LIST_NUMBERED)
+                        )
+                    else:
+                        anchor_elem.addnext(
+                            _build_word_style_para_elem(
+                                _strip_bullet_prefix(bullet), STYLE_LIST_BULLET
+                            )
+                        )
+                anchor_elem.addnext(_build_word_style_para_elem(display_label, STYLE_HEADING3))
 
     def _inject_labeled_content(
         self,
