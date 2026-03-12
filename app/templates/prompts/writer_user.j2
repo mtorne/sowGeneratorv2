@@ -155,18 +155,31 @@ Architecture:
 {{ diagram_components | tojson(indent=2) }}
 {% endif %}
 
-Separate content by these EXACT group labels (plain-text, each on its own line):
+Use the following groups as a baseline. You MAY add supplementary groups (e.g. Regional Setup,
+Traffic Management, Disaster Recovery) when the architecture warrants them.
+Omit any group that has no relevant content rather than writing PENDING TO REVIEW.
+
+Baseline groups (plain-text label on its own line):
 Networking | Security | Compute | Storage and Databases | DevOps and Management
 
-For each group write 3–10 bullets using "–" prefix and active verbs (Create, Deploy, Configure,
-Establish, Provision, Attach).
-After the bullets for each group, you MAY add 1-2 sentences explaining key architectural decisions or trade-offs.
+For each group write 3–8 detailed implementation steps using "–" prefix.
+Each step MUST be 2–3 sentences long:
+  - First sentence: what is provisioned or configured.
+  - Second sentence: specific configuration parameters (shapes, CIDRs, modes, versions, ports).
+  - Optional third sentence: architectural rationale or best-practice justification.
 
-CRITICAL — every bullet MUST include concrete configuration details when available:
-- Service version or edition (e.g. "Oracle Database 19c Enterprise Edition", "OKE v1.28",
-  "MySQL HeatWave 8.0", "Oracle Linux 8")
-- Instance shapes and sizing (e.g. "VM.Standard.E4.Flex with 8 OCPUs / 128 GB RAM",
-  "BM.Standard3.64", "Exadata X9M quarter rack")
+After each group, add 1–2 sentences summarising the key architectural decision or trade-off.
+
+BULLET DEPTH — compare these examples:
+GOOD: "– Provision a Flexible Load Balancer in the LB Public Subnet in each region with
+  health-check probes on port 443. Configure the backend set with the private IPs of the
+  Apache VMs distributed across Fault Domains FD1, FD2, and FD3, using round-robin routing
+  to maximise availability within the single Availability Domain."
+BAD:  "– Deploy Load Balancer for traffic distribution."
+
+CRITICAL — every step MUST include concrete configuration details when available:
+- Service version or edition (e.g. "Oracle Database 19c Enterprise Edition", "OKE v1.28")
+- Instance shapes and sizing (e.g. "VM.Standard.E4.Flex with 8 OCPUs / 128 GB RAM")
 - Network configuration (CIDR ranges, subnet placements, port numbers, protocol details)
 - Storage specifications (Block Volume size in GB/TB, performance tier, backup policies)
 - Database configuration (PDB/CDB layout, Data Guard mode, character set, backup schedule)
@@ -177,7 +190,6 @@ CRITICAL — every bullet MUST include concrete configuration details when avail
 Use the specific region names, CIDR ranges, service names, subnet placements, and Fault Domain
 details from the architecture and scope above.
 Write PENDING TO REVIEW only for values that are genuinely absent from both sources.
-If a group has no identifiable services, write one bullet: "– PENDING TO REVIEW"
 {% endif %}
 
 {% if section_name == 'CURRENTLY USED TECHNOLOGY STACK' %}

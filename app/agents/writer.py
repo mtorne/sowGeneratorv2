@@ -94,6 +94,13 @@ class WriterAgent:
                     if joined:
                         label = key.replace("_", " ").title()
                         lines.append(f"Target {label}: {joined}")
+            # For IMPLEMENTATION DETAILS, surface deployment topology as an
+            # evidence line so the LLM treats region/subnet/gateway data as
+            # mandatory facts rather than optional context.
+            if sname == "IMPLEMENTATION DETAILS":
+                topo = diagram_components.get("deployment_topology")
+                if topo and str(topo).strip():
+                    lines.append(f"Deployment topology: {str(topo).strip()}")
         elif sname == "CURRENTLY USED TECHNOLOGY STACK":
             arch = context.get("architecture_analysis", {})
             if isinstance(arch, dict):
@@ -180,6 +187,26 @@ class WriterAgent:
         ):
             guardrails.append(
                 "Multi-region deployment — describe primary/DR region roles."
+            )
+
+        # Implementation-specific guardrails: surface when subnet, storage,
+        # or DNS patterns are detected so the LLM produces deeper bullets.
+        if "subnet" in all_text:
+            guardrails.append(
+                "Subnets detected — list each subnet with its CIDR, visibility "
+                "(public/private), and role (LB, Web, App, DB)."
+            )
+
+        if "file storage" in all_text or "fss" in all_text or "mount target" in all_text:
+            guardrails.append(
+                "File Storage detected — describe mount targets, cross-region "
+                "replication, and NFS configuration."
+            )
+
+        if "dns" in all_text or "traffic management" in all_text:
+            guardrails.append(
+                "DNS / traffic management detected — describe routing policy "
+                "and regional failover mechanism."
             )
 
         return guardrails
