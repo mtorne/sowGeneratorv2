@@ -31,6 +31,7 @@ def test_llm_config_uses_backend_compatible_defaults(monkeypatch) -> None:
 
     assert config.endpoint == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
     assert config.model_id == "google.gemini-2.5-pro"
+    assert config.max_tokens == 6000
     assert config.compartment_id.startswith("ocid1.compartment.oc1")
 
 
@@ -71,3 +72,12 @@ def test_call_llm_uses_valid_top_k(monkeypatch) -> None:
 
     assert out == "ok"
     assert captured["details"].chat_request.top_k >= 1
+    assert captured["details"].chat_request.max_tokens == 6000
+
+
+def test_llm_config_respects_oci_max_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("OCI_MAX_TOKENS", "9000")
+
+    config = LLMConfig.from_env()
+
+    assert config.max_tokens == 9000

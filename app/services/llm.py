@@ -74,6 +74,7 @@ class LLMConfig:
     temperature: float
     timeout_connect: float
     timeout_read: float
+    max_tokens: int
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -88,6 +89,7 @@ class LLMConfig:
             temperature=oci_settings.temperature,
             timeout_connect=oci_settings.timeout_connect,
             timeout_read=oci_settings.timeout_read,
+            max_tokens=int(os.getenv("OCI_MAX_TOKENS", "6000")),
         )
 
 
@@ -139,7 +141,7 @@ def call_llm(system_prompt: str, user_prompt: str) -> str:
         top_p=0.9,
         # OCI rejects top_k < 1 for some models (e.g., Gemini via OCI wrapper).
         top_k=1,
-        max_tokens=2500,
+        max_tokens=config.max_tokens,
     )
     details = ChatDetails(
         compartment_id=config.compartment_id,
