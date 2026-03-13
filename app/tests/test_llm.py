@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from app.services import llm
 from app.services.llm import LLMConfig
 from app.config.settings import OCISettings
 
@@ -27,7 +30,8 @@ def test_llm_config_uses_backend_compatible_defaults(monkeypatch) -> None:
     config = LLMConfig.from_env()
 
     assert config.endpoint == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
-    assert config.model_id == "meta.llama-4-maverick-17b-128e-instruct-fp8"
+    assert config.model_id == "google.gemini-2.5-pro"
+    assert config.max_tokens == 6000
     assert config.compartment_id.startswith("ocid1.compartment.oc1")
 
 
@@ -47,3 +51,71 @@ def test_oci_settings_defaults_multimodal_model_to_gemini_pro(monkeypatch) -> No
     settings = OCISettings.from_env()
 
     assert settings.multimodal_model_name == "google.gemini-2.5-pro"
+
+
+def test_call_llm_uses_valid_top_k(monkeypatch) -> None:
+    captured = {}
+
+    class _FakeClient:
+        def chat(self, details):  # pragma: no cover - execution goes through patched retry
+            return details
+
+    def _fake_retry(fn, details, **kwargs):
+        captured["details"] = details
+        return SimpleNamespace()
+
+    monkeypatch.setattr(llm, "_build_client", lambda config: _FakeClient())
+    monkeypatch.setattr(llm, "_call_with_retry", _fake_retry)
+    monkeypatch.setattr(llm, "_extract_text", lambda response: "ok")
+
+    out = llm.call_llm("sys", "user")
+
+    assert out == "ok"
+    assert captured["details"].chat_request.top_k >= 1
+    assert captured["details"].chat_request.max_tokens == 6000
+
+
+def test_llm_config_respects_oci_max_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("OCI_MAX_TOKENS", "9000")
+
+    config = LLMConfig.from_env()
+
+    assert config.max_tokens == 9000
+
+
+def test_call_with_retry_retries_on_timeout_error(monkeypatch) -> None:
+    attempts = {"n": 0}
+
+    def _flaky():
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise TimeoutError("read timed out")
+        return "ok"
+
+    monkeypatch.setattr(llm.time, "sleep", lambda _x: None)
+
+    out = llm._call_with_retry(_flaky, max_retries=3)
+
+    assert out == "ok"
+    assert attempts["n"] == 3
+
+
+def test_call_llm_maps_request_exception_to_clear_runtime_error(monkeypatch) -> None:
+    class _FakeClient:
+        def chat(self, _details):
+            return SimpleNamespace()
+
+    monkeypatch.setattr(llm, "_build_client", lambda _config: _FakeClient())
+    monkeypatch.setattr(
+        llm,
+        "_call_with_retry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            llm.oci.exceptions.RequestException(Exception("read timeout"))
+        ),
+    )
+
+    try:
+        llm.call_llm("sys", "user")
+        assert False, "Expected RuntimeError"
+    except RuntimeError as exc:
+        assert "timed out" in str(exc).lower() or "transport" in str(exc).lower()

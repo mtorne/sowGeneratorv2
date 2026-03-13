@@ -35,7 +35,7 @@ class OCISettings:
         model_id = (
             os.getenv("OCI_MODEL_ID")
             or os.getenv("OCI_MODEL_ID_LLAMA")
-            or "meta.llama-4-maverick-17b-128e-instruct-fp8"
+            or "google.gemini-2.5-pro"
         )
         compartment_id = os.getenv(
             "OCI_COMPARTMENT_ID",

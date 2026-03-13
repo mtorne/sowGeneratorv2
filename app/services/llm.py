@@ -37,9 +37,13 @@ def _call_with_retry(
     max_retries: int = _MAX_LLM_RETRIES,
     **kwargs: Any,
 ) -> _T:
-    """Call *fn* with exponential backoff on transient OCI ServiceErrors.
+    """Call *fn* with exponential backoff on transient OCI failures.
 
-    Retries up to *max_retries* times on HTTP 429/5xx responses.
+    Retries up to *max_retries* times on:
+    - OCI ServiceError with HTTP 429/5xx
+    - OCI RequestException (network/read timeout transport failures)
+    - Native TimeoutError
+
     Other exceptions (parsing failures, 4xx client errors) propagate immediately.
     """
     for attempt in range(1, max_retries + 2):  # +2: initial attempt + max_retries
@@ -58,6 +62,30 @@ def _call_with_retry(
                 exc.message,
             )
             time.sleep(wait)
+        except oci.exceptions.RequestException as exc:
+            if attempt > max_retries:
+                raise
+            wait = min(1.0 * (2 ** (attempt - 1)) + random.uniform(0, 1.0), 30.0)
+            logger.warning(
+                "OCI transient request exception attempt=%d/%d retrying in %.1fs: %s",
+                attempt,
+                max_retries,
+                wait,
+                str(exc),
+            )
+            time.sleep(wait)
+        except TimeoutError as exc:
+            if attempt > max_retries:
+                raise
+            wait = min(1.0 * (2 ** (attempt - 1)) + random.uniform(0, 1.0), 30.0)
+            logger.warning(
+                "OCI timeout attempt=%d/%d retrying in %.1fs: %s",
+                attempt,
+                max_retries,
+                wait,
+                str(exc),
+            )
+            time.sleep(wait)
     # Unreachable — loop always returns or raises.
     raise RuntimeError("_call_with_retry exhausted without result")  # pragma: no cover
 
@@ -74,6 +102,7 @@ class LLMConfig:
     temperature: float
     timeout_connect: float
     timeout_read: float
+    max_tokens: int
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -88,6 +117,7 @@ class LLMConfig:
             temperature=oci_settings.temperature,
             timeout_connect=oci_settings.timeout_connect,
             timeout_read=oci_settings.timeout_read,
+            max_tokens=int(os.getenv("OCI_MAX_TOKENS", "6000")),
         )
 
 
@@ -137,8 +167,9 @@ def call_llm(system_prompt: str, user_prompt: str) -> str:
         api_format=BaseChatRequest.API_FORMAT_GENERIC,
         temperature=config.temperature,
         top_p=0.9,
-        top_k=-1,
-        max_tokens=2500,
+        # OCI rejects top_k < 1 for some models (e.g., Gemini via OCI wrapper).
+        top_k=1,
+        max_tokens=config.max_tokens,
     )
     details = ChatDetails(
         compartment_id=config.compartment_id,
@@ -153,6 +184,12 @@ def call_llm(system_prompt: str, user_prompt: str) -> str:
     except oci.exceptions.ServiceError as exc:
         logger.exception("OCI service error status=%s", exc.status)
         raise RuntimeError(f"OCI service error: {exc.message}") from exc
+    except oci.exceptions.RequestException as exc:
+        logger.exception("OCI request exception (likely network/timeout)")
+        raise RuntimeError("OCI request timed out or failed during transport") from exc
+    except TimeoutError as exc:
+        logger.exception("OCI timeout error")
+        raise RuntimeError("OCI request timed out") from exc
     except Exception as exc:
         logger.exception("Unexpected OCI LLM error")
         raise RuntimeError("Unexpected LLM invocation failure") from exc
