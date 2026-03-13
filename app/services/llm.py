@@ -137,7 +137,8 @@ def call_llm(system_prompt: str, user_prompt: str) -> str:
         api_format=BaseChatRequest.API_FORMAT_GENERIC,
         temperature=config.temperature,
         top_p=0.9,
-        top_k=-1,
+        # OCI rejects top_k < 1 for some models (e.g., Gemini via OCI wrapper).
+        top_k=1,
         max_tokens=2500,
     )
     details = ChatDetails(
