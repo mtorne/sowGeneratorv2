@@ -81,3 +81,41 @@ def test_llm_config_respects_oci_max_tokens(monkeypatch) -> None:
     config = LLMConfig.from_env()
 
     assert config.max_tokens == 9000
+
+
+def test_call_with_retry_retries_on_timeout_error(monkeypatch) -> None:
+    attempts = {"n": 0}
+
+    def _flaky():
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise TimeoutError("read timed out")
+        return "ok"
+
+    monkeypatch.setattr(llm.time, "sleep", lambda _x: None)
+
+    out = llm._call_with_retry(_flaky, max_retries=3)
+
+    assert out == "ok"
+    assert attempts["n"] == 3
+
+
+def test_call_llm_maps_request_exception_to_clear_runtime_error(monkeypatch) -> None:
+    class _FakeClient:
+        def chat(self, _details):
+            return SimpleNamespace()
+
+    monkeypatch.setattr(llm, "_build_client", lambda _config: _FakeClient())
+    monkeypatch.setattr(
+        llm,
+        "_call_with_retry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            llm.oci.exceptions.RequestException(Exception("read timeout"))
+        ),
+    )
+
+    try:
+        llm.call_llm("sys", "user")
+        assert False, "Expected RuntimeError"
+    except RuntimeError as exc:
+        assert "timed out" in str(exc).lower() or "transport" in str(exc).lower()
