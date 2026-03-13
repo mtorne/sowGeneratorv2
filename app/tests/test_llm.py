@@ -27,7 +27,7 @@ def test_llm_config_uses_backend_compatible_defaults(monkeypatch) -> None:
     config = LLMConfig.from_env()
 
     assert config.endpoint == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
-    assert config.model_id == "meta.llama-4-maverick-17b-128e-instruct-fp8"
+    assert config.model_id == "google.gemini-2.5-pro"
     assert config.compartment_id.startswith("ocid1.compartment.oc1")
 
 
