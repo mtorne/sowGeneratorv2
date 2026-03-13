@@ -414,6 +414,68 @@ def _build_word_style_para_elem(text: str, style_id: str) -> object:
     return new_para
 
 
+def _build_word_style_para_elem_with_bold_lead(text: str, style_id: str) -> object:
+    """Build styled paragraph and render leading markdown bold label as bold run.
+
+    Supports bullet lines such as:
+    - ``**OCI File Storage:** Shared NFS for app nodes``
+    - ``**OCI File Storage**: Shared NFS for app nodes``
+
+    When no markdown-bold lead is present, falls back to
+    :func:`_build_word_style_para_elem`.
+    """
+    text = (text or "").strip()
+    # Match a leading markdown-bold label either with colon inside or outside.
+    m = re.match(r"^\*\*(.+?:)\*\*\s*(.*)$", text) or re.match(r"^\*\*(.+?)\*\*:\s*(.*)$", text)
+    if not m:
+        return _build_word_style_para_elem(text, style_id)
+
+    label = m.group(1).strip()
+    rest = (m.group(2) or "").strip()
+    # Remove any residual markdown bold markers from the body text.
+    rest = re.sub(r"\*\*(.+?)\*\*", r"\1", rest)
+
+    new_para = OxmlElement("w:p")
+    pPr = OxmlElement("w:pPr")
+    pStyle = OxmlElement("w:pStyle")
+    pStyle.set(qn("w:val"), style_id)
+    pPr.append(pStyle)
+    new_para.insert(0, pPr)
+
+    def _append_run(run_text: str, *, bold: bool = False, red: bool = False) -> None:
+        if not run_text:
+            return
+        r = OxmlElement("w:r")
+        if bold or red:
+            rPr = OxmlElement("w:rPr")
+            if bold:
+                rPr.append(OxmlElement("w:b"))
+            if red:
+                c = OxmlElement("w:color")
+                c.set(qn("w:val"), PENDING_COLOR)
+                rPr.append(c)
+            r.append(rPr)
+        t_elem = OxmlElement("w:t")
+        t_elem.text = run_text
+        t_elem.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        r.append(t_elem)
+        new_para.append(r)
+
+    _append_run(label, bold=True)
+    if rest:
+        _append_run(" ")
+        if _PENDING_MARKER in rest:
+            parts = rest.split(_PENDING_MARKER)
+            for idx, part in enumerate(parts):
+                _append_run(part)
+                if idx < len(parts) - 1:
+                    _append_run(_PENDING_MARKER, red=True)
+        else:
+            _append_run(rest)
+
+    return new_para
+
+
 def _strip_bullet_prefix(text: str) -> str:
     """Remove a leading ``– ``, ``- ``, or ``• `` bullet prefix from *text*.
 
@@ -1354,7 +1416,7 @@ class DocumentBuilder:
                         )
                     else:
                         anchor_elem.addnext(
-                            _build_word_style_para_elem(
+                            _build_word_style_para_elem_with_bold_lead(
                                 _strip_bullet_prefix(sentence), STYLE_LIST_BULLET
                             )
                         )
@@ -1365,7 +1427,9 @@ class DocumentBuilder:
                 if markdown_bullets:
                     for bullet in reversed(markdown_bullets):
                         anchor_elem.addnext(
-                            _build_word_style_para_elem(bullet, STYLE_LIST_BULLET)
+                            _build_word_style_para_elem_with_bold_lead(
+                                bullet, STYLE_LIST_BULLET
+                            )
                         )
                 else:
                     anchor_elem.addnext(_build_para_elem(block))
