@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from app.services import llm
 from app.services.llm import LLMConfig
 from app.config.settings import OCISettings
 
@@ -47,3 +50,24 @@ def test_oci_settings_defaults_multimodal_model_to_gemini_pro(monkeypatch) -> No
     settings = OCISettings.from_env()
 
     assert settings.multimodal_model_name == "google.gemini-2.5-pro"
+
+
+def test_call_llm_uses_valid_top_k(monkeypatch) -> None:
+    captured = {}
+
+    class _FakeClient:
+        def chat(self, details):  # pragma: no cover - execution goes through patched retry
+            return details
+
+    def _fake_retry(fn, details, **kwargs):
+        captured["details"] = details
+        return SimpleNamespace()
+
+    monkeypatch.setattr(llm, "_build_client", lambda config: _FakeClient())
+    monkeypatch.setattr(llm, "_call_with_retry", _fake_retry)
+    monkeypatch.setattr(llm, "_extract_text", lambda response: "ok")
+
+    out = llm.call_llm("sys", "user")
+
+    assert out == "ok"
+    assert captured["details"].chat_request.top_k >= 1
