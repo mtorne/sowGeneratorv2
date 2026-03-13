@@ -426,6 +426,23 @@ def _strip_bullet_prefix(text: str) -> str:
     return text
 
 
+def _extract_markdown_bullet_lines(block: str) -> list[str]:
+    """Return de-prefixed lines when *block* is a pure markdown bullet list.
+
+    This is used to normalize LLM markdown output (``- item`` / ``* item``)
+    into proper Word bullet paragraphs so generated sections avoid a mixed
+    presentation of Word bullets and literal dash-prefixed lines.
+    """
+    lines = [line.strip() for line in block.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    cleaned = [_strip_bullet_prefix(line) for line in lines]
+    if all(cleaned_line != original for cleaned_line, original in zip(cleaned, lines)):
+        return cleaned
+    return []
+
+
 def _build_indented_para_elem(text: str, left_twips: int = 0) -> object:
     """Build a ``<w:p>`` with optional left indentation.
 
@@ -1297,6 +1314,8 @@ class DocumentBuilder:
         the sentence-boundary splitter is used instead.
 
         Other blocks (e.g. introductory paragraphs) are inserted as plain paragraphs.
+        A block made only of markdown bullets (``-`` / ``*`` / ``•`` / ``–``)
+        is normalized into proper Word bullet styles.
 
         Inserts in reverse order so that block[0] ends up immediately after anchor_elem.
         """
@@ -1342,7 +1361,14 @@ class DocumentBuilder:
                 # Insert Heading3 label before the bullets
                 anchor_elem.addnext(_build_word_style_para_elem(first_line, STYLE_HEADING3))
             else:
-                anchor_elem.addnext(_build_para_elem(block))
+                markdown_bullets = _extract_markdown_bullet_lines(block)
+                if markdown_bullets:
+                    for bullet in reversed(markdown_bullets):
+                        anchor_elem.addnext(
+                            _build_word_style_para_elem(bullet, STYLE_LIST_BULLET)
+                        )
+                else:
+                    anchor_elem.addnext(_build_para_elem(block))
 
     @staticmethod
     def _inject_hierarchical_bullets_after_element(anchor_elem, content: str) -> None:
