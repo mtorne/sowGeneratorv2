@@ -39,6 +39,7 @@ from app.services.doc_style_constants import (
     TABLE_HEADER_FILL,
     TABLE_HEADER_TEXT,
     TABLE_STYLE_BOM,
+    TABLE_STYLE_PRIMARY,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ _INJECT_AT_TOP_SECTIONS: frozenset[str] = frozenset()
 # Sections whose LLM output uses sub-topic labels (Networking, Security, Compute …)
 # and should be formatted with bold labels + sentence-level bullet points.
 _LABELED_FORMAT_SECTIONS = frozenset({
+    "ARCHITECTURE DEPLOYMENT OVERVIEW",
     "IMPLEMENTATION DETAILS",
     # Architect review uses the same label+bullet format for its sub-sections.
     "ARCHITECT REVIEW",
@@ -197,6 +199,14 @@ _SINGLE_SENTENCE_SECTIONS = frozenset({
 
 # Known sub-topic label set for LABELED_FORMAT_SECTIONS
 _SUB_TOPIC_LABELS = frozenset({
+    # Architecture Deployment Overview sub-sections
+    "regions & vcns",
+    "subnet segmentation",
+    "ingress & egress gateways",
+    "compute tiers",
+    "database layer",
+    "shared storage / file replication",
+    "dns & traffic management",
     "networking",
     "security",
     "compute",
@@ -486,6 +496,22 @@ def _strip_bullet_prefix(text: str) -> str:
         if text.startswith(prefix):
             return text[len(prefix):]
     return text
+
+
+def _normalize_subtopic_label(text: str) -> tuple[str, str]:
+    """Normalize label lines into (lookup_key, display_label).
+
+    Handles variants such as:
+    - ``• **Regions & VCNs:**``
+    - ``**Networking:**``
+    - ``Networking:``
+    """
+    label = _strip_bullet_prefix((text or "").strip())
+    # Remove markdown bold wrappers when present.
+    label = re.sub(r"^\*\*(.*?)\*\*$", r"\1", label).strip()
+    # Allow trailing colon in authored output, but keep clean display.
+    display = label.rstrip(":").strip()
+    return display.lower(), display
 
 
 def _extract_markdown_bullet_lines(block: str) -> list[str]:
@@ -1385,9 +1411,10 @@ class DocumentBuilder:
 
         for block in reversed(blocks):
             lines = block.split("\n", 1)
-            first_line = lines[0].strip().rstrip(":")
+            raw_label_line = lines[0].strip()
+            first_line_key, first_line = _normalize_subtopic_label(raw_label_line)
             body = lines[1].strip() if len(lines) > 1 else ""
-            is_label = first_line.lower() in _SUB_TOPIC_LABELS
+            is_label = first_line_key in _SUB_TOPIC_LABELS
 
             if is_label and body:
                 # Split body into individual items.  When the body is multi-line
@@ -1648,6 +1675,59 @@ class DocumentBuilder:
                 )
         # Non-structured labeled section or JSON parse failure
         self._inject_formatted_blocks_after_element(anchor_elem, content)
+
+    @staticmethod
+    def _parse_markdown_table(content: str) -> tuple[list[str], list[list[str]]]:
+        """Parse a simple markdown table into headers + data rows.
+
+        Returns empty lists when parsing fails.
+        """
+        lines = [ln.strip() for ln in (content or "").splitlines() if ln.strip()]
+        table_lines = [ln for ln in lines if ln.startswith("|") and ln.endswith("|")]
+        if len(table_lines) < 2:
+            return [], []
+
+        def _cells(line: str) -> list[str]:
+            return [c.strip() for c in line.strip("|").split("|")]
+
+        headers = _cells(table_lines[0])
+        if len(headers) < 2:
+            return [], []
+
+        rows: list[list[str]] = []
+        for ln in table_lines[1:]:
+            cells = _cells(ln)
+            if len(cells) != len(headers):
+                continue
+            # Skip markdown separator row like |---|:---:|
+            if all(re.fullmatch(r":?-{3,}:?", c.replace(" ", "")) for c in cells):
+                continue
+            rows.append(cells)
+
+        return headers, rows
+
+    def _inject_arch_components_table_after_element(self, anchor_elem, content: str, doc: Document | None) -> bool:
+        """Render ARCHITECTURE COMPONENTS markdown table as an actual Word table."""
+        if doc is None:
+            return False
+
+        headers, rows = self._parse_markdown_table(content)
+        if len(headers) < 2 or not rows:
+            return False
+
+        n_cols = len(headers)
+        table = doc.add_table(rows=1 + len(rows), cols=n_cols)
+
+        for ci, header in enumerate(headers):
+            self._set_cell_text(table.rows[0].cells[ci], header)
+
+        for ri, row in enumerate(rows, start=1):
+            for ci, val in enumerate(row):
+                self._set_cell_text(table.rows[ri].cells[ci], val)
+
+        self._style_components_table(table)
+        anchor_elem.addnext(table._tbl)
+        return True
 
     # ------------------------------------------------------------------
     # Table data filling
@@ -2237,6 +2317,35 @@ class DocumentBuilder:
                 DocumentBuilder._set_cell_fill(cell, fill)
                 DocumentBuilder._set_cell_text_color(cell, "000000")
 
+    def _style_components_table(self, table) -> None:
+        """Apply primary matrix style for Architecture Components tables."""
+        if not table.rows:
+            return
+
+        tbl_elem = table._tbl
+        tblPr = tbl_elem.find(qn("w:tblPr"))
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl_elem.insert(0, tblPr)
+
+        tblStyle = tblPr.find(qn("w:tblStyle"))
+        if tblStyle is None:
+            tblStyle = OxmlElement("w:tblStyle")
+            tblPr.insert(0, tblStyle)
+        tblStyle.set(qn("w:val"), TABLE_STYLE_PRIMARY)
+
+        # Header row styling
+        for cell in table.rows[0].cells:
+            self._set_cell_fill(cell, TABLE_HEADER_FILL)
+            self._set_cell_text_color(cell, TABLE_HEADER_TEXT, bold=True)
+
+        # Alternating row shading to match responsibilities matrix look.
+        for ridx, row in enumerate(table.rows[1:], start=1):
+            fill = TABLE_ALT_FILL_LIGHT if ridx % 2 else "FCFBFA"
+            for cell in row.cells:
+                self._set_cell_fill(cell, fill)
+                self._set_cell_text_color(cell, BODY_COLOR, bold=False)
+
     def _delete_section_from_template(self, doc: Document, section_name: str) -> bool:
         """Remove a section's heading and all body content up to the next same-level heading.
 
@@ -2396,7 +2505,9 @@ class DocumentBuilder:
             anchor_elem = paragraphs[heading_idx]._element
             _use_formatted    = section_name.upper() in _LABELED_FORMAT_SECTIONS
             _use_hierarchical = section_name.upper() in _HIERARCHICAL_BULLET_SECTIONS
-            if _use_formatted:
+            if section_name.upper() == "ARCHITECTURE COMPONENTS" and self._inject_arch_components_table_after_element(anchor_elem, content, doc):
+                pass
+            elif _use_formatted:
                 self._inject_labeled_content(anchor_elem, content, section_name, doc=doc)
             elif _use_hierarchical:
                 self._inject_hierarchical_bullets_after_element(anchor_elem, content)
@@ -2429,7 +2540,9 @@ class DocumentBuilder:
             if para.text.strip() and not _PLACEHOLDER_RE.search(para.text):
                 anchor_elem = para._element  # advance anchor past intro para(s)
 
-        if section_name.upper() in _LABELED_FORMAT_SECTIONS:
+        if section_name.upper() == "ARCHITECTURE COMPONENTS" and self._inject_arch_components_table_after_element(anchor_elem, content, doc):
+            pass
+        elif section_name.upper() in _LABELED_FORMAT_SECTIONS:
             self._inject_labeled_content(anchor_elem, content, section_name, doc=doc)
         else:
             self._inject_blocks_after_element(anchor_elem, content)
@@ -2507,7 +2620,9 @@ class DocumentBuilder:
         # Inject body content after the new heading.
         _use_formatted = section_name.upper() in _LABELED_FORMAT_SECTIONS
         _use_hierarchical = section_name.upper() in _HIERARCHICAL_BULLET_SECTIONS
-        if _use_formatted:
+        if section_name.upper() == "ARCHITECTURE COMPONENTS" and self._inject_arch_components_table_after_element(heading_elem, content, doc):
+            pass
+        elif _use_formatted:
             self._inject_labeled_content(heading_elem, content, section_name, doc=doc)
         elif _use_hierarchical:
             self._inject_hierarchical_bullets_after_element(heading_elem, content)
@@ -2533,6 +2648,8 @@ class DocumentBuilder:
         structure is preserved even when the section is not found in the template.
         """
         heading = doc.add_heading(section_name.title(), level=1)
+        if section_name.upper() == "ARCHITECTURE COMPONENTS" and self._inject_arch_components_table_after_element(heading._element, content, doc):
+            return
         if section_name.upper() in _LABELED_FORMAT_SECTIONS:
             self._inject_labeled_content(heading._element, content, section_name, doc=doc)
         else:

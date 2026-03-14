@@ -79,9 +79,9 @@ Strict rules:
 {% endif %}
 
 {% if section_name == 'ARCHITECTURE COMPONENTS' %}
-Write a flat listing of every OCI component and service used in this architecture.
-Do NOT group by category. Do NOT use sub-topic labels such as Networking, Security, etc.
-Do NOT add a "Key Highlights" section.
+Write this section as a two-column table only.
+Use this exact header row:
+| OCI Component | Purpose & Key Configuration |
 
 {% if diagram_components %}
 IMPORTANT: The target architecture diagram was analysed automatically. Use ONLY the real
@@ -93,32 +93,24 @@ Diagram-identified components (JSON):
 Reference only components explicitly mentioned in the project data.
 {% endif %}
 
-WRITING STYLE — follow this pattern for each component (definition style):
-Write each component as: "**Component Name:** 1-3 sentence description of its role, including configuration details where available."
-Example:
-  Virtual Cloud Networks (VCNs): Virtual networks in OCI providing network isolation,
-  subnet segmentation, and security-list-controlled traffic between tiers.
-  Local Peering Gateways (LPGs): Inter-VCN connectivity within the same region for
-  east-west traffic between hub and spoke networks.
-
-Rules:
-- List 2-8 components per sub-topic with definition-style descriptions.
-- Write in professional prose — do NOT use dash-prefixed bullet lists.
-- Each component description must be project-specific, not generic boilerplate.
-- Focus on technical accuracy and OCI best practices.
+Table rules:
+- One row per distinct OCI service or component.
+- Column 1 (OCI Component): service/component name only, no prose.
+- Column 2 (Purpose & Key Configuration): 2-3 sentences maximum from existing project facts.
+- Do not add new information, assumptions, or inferred services.
+- If multiple VM tiers exist, add separate rows for each tier.
+- Do not add prose before or after the table.
 {% endif %}
 
 {% if section_name == 'ARCHITECTURE DEPLOYMENT OVERVIEW' %}
-Write a high-level Architecture and Deployment Overview for this engagement.
+Write this section using the exact structure below.
 Use a formal third-person tone suitable for a customer-facing Statement of Work.
-Focus on describing the deployment approach, OCI architecture structure, networking model, and key services used.
-Treat any system or service that resides outside OCI cloud regions or tenancies as a third-party integration.
+Treat any system or service outside OCI regions/tenancies as a third-party integration.
 
 {% if diagram_components %}
 Target architecture analysis:
 {% if diagram_components.get('deployment_topology') %}
-Deployment topology (read directly from the diagram — use these region names, CIDR ranges,
-and connectivity details verbatim in the first paragraph):
+Deployment topology (use these region names, CIDR ranges, and connectivity details verbatim):
 {{ diagram_components.get('deployment_topology') }}
 
 {% endif %}
@@ -126,14 +118,24 @@ Components by category:
 {{ diagram_components | tojson(indent=2) }}
 {% endif %}
 
-Requirements:
-- Write 2-3 paragraphs covering the deployment approach, OCI architecture, networking, and key services.
-- Name the actual OCI services from the project data — do not use generic terms.
-- Highlight best practices for deployment, scalability, and security where relevant.
-- When deployment topology is provided above, use the exact region names, CIDR ranges, and
-  connectivity details — do not replace them with generic placeholders or PENDING TO REVIEW.
-- Do NOT use bullet points, numbered lists, or markdown headings.
-- Do NOT repeat granular config details that belong in Implementation Details.
+Required format:
+1) Intro paragraph: maximum 2 sentences summarising the deployment model.
+2) Follow with bullet groups using only relevant labels from this list:
+   • Regions & VCNs:
+   • Subnet Segmentation:
+   • Ingress & Egress Gateways:
+   • Compute Tiers:
+   • Database Layer:
+   • Shared Storage / File Replication:
+   • DNS & Traffic Management:
+3) Each group label must be bold and on its own line.
+4) Under each label, add 1-3 bullets.
+5) Each bullet must be exactly one line and contain one concept only.
+
+Rules:
+- Use exact region names, CIDR ranges, and connectivity values when available.
+- Do not add new technical data.
+- Do not output dense prose paragraphs beyond the opening intro.
 {% endif %}
 
 {% if section_name == 'IMPLEMENTATION DETAILS' %}
@@ -155,41 +157,23 @@ Architecture:
 {{ diagram_components | tojson(indent=2) }}
 {% endif %}
 
-Use the following groups as a baseline. You MAY add supplementary groups (e.g. Regional Setup,
-Traffic Management, Disaster Recovery) when the architecture warrants them.
-Omit any group that has no relevant content rather than writing PENDING TO REVIEW.
+Formatting requirements (strict):
+- Use only ### level subsection headings for this section.
+- Required subsection headings:
+  ### Networking
+  ### Compute and Load Balancing
+  ### Storage and Databases
+- Never use inline heading formats such as "-- **Heading**".
+- Within each subsection, use bullet points only (no mixed prose + bullets).
 
-Baseline groups (plain-text label on its own line):
-Networking | Security | Compute | Storage and Databases | DevOps and Management
-
-For each group write 3–8 detailed implementation steps using "–" prefix.
-Each step MUST be 2–3 sentences long:
-  - First sentence: what is provisioned or configured.
-  - Second sentence: specific configuration parameters (shapes, CIDRs, modes, versions, ports).
-  - Optional third sentence: architectural rationale or best-practice justification.
-
-Do NOT add a trailing summary/comment line after a group (for example, lines starting with "Key" or "Key facts").
-
-BULLET DEPTH — compare these examples:
-GOOD: "– Provision a Flexible Load Balancer in the LB Public Subnet in each region with
-  health-check probes on port 443. Configure the backend set with the private IPs of the
-  Apache VMs distributed across Fault Domains FD1, FD2, and FD3, using round-robin routing
-  to maximise availability within the single Availability Domain."
-BAD:  "– Deploy Load Balancer for traffic distribution."
-
-CRITICAL — every step MUST include concrete configuration details when available:
-- Service version or edition (e.g. "Oracle Database 19c Enterprise Edition", "OKE v1.28")
-- Instance shapes and sizing (e.g. "VM.Standard.E4.Flex with 8 OCPUs / 128 GB RAM")
-- Network configuration (CIDR ranges, subnet placements, port numbers, protocol details)
-- Storage specifications (Block Volume size in GB/TB, performance tier, backup policies)
-- Database configuration (PDB/CDB layout, Data Guard mode, character set, backup schedule)
-- Cluster details (node pool count, worker node shape, Kubernetes version, pod CIDR)
-- Security settings (TLS version, encryption algorithms, IAM policy scope, NSG rules)
-- Replication and HA settings (sync/async, standby type, failover mode)
-
-Use the specific region names, CIDR ranges, service names, subnet placements, and Fault Domain
-details from the architecture and scope above.
-Write PENDING TO REVIEW only for values that are genuinely absent from both sources.
+Content requirements:
+- For each subsection write 3-8 detailed bullet steps using "- " prefix.
+- Each step MUST be 2-3 sentences long.
+- First sentence: what is provisioned or configured.
+- Second sentence: specific parameters (shapes, CIDRs, ports, versions, modes).
+- Optional third sentence: rationale or best-practice justification.
+- Do not add new technical facts or placeholder assumptions.
+- Write PENDING TO REVIEW only when details are missing from both scope and architecture data.
 {% endif %}
 
 {% if section_name == 'CURRENTLY USED TECHNOLOGY STACK' %}
